@@ -5,15 +5,17 @@ import numpy as np
 import pandas as pd
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import KFold
 
 from settings import BATCH_SIZE
-# from sklearn.datasets import load_files
-# from tflearn.data_utils import VocabularyProcessor
 
 
 class Corpus(Dataset):
+    def __init__(self):
+        self.normalizer = MinMaxScaler(feature_range=(-1, 1))
+        self.load_corpus()
+
     def clean_str(self, string):
         """
         mostly copy pasted from Hollenstein's code...
@@ -44,21 +46,34 @@ class Corpus(Dataset):
 
         return string.strip().lower()
 
-    def print_stats(self, arr):
-        print('\n', self.name, 'ET minimum values:', np.nanmin(arr, 1))
-        print(self.name, 'ET maximum values:', np.nanmax(arr, 1))
-        print('Normalizer var:', self.normalizer.var_)
-        print('Normalizer mean:', self.normalizer.mean_)
+    def normalize_et(self):
+        # We keep the NaN values at first so that it doesn't mess up
+        # the normalization process.
+        # Let's only convert them to 0s after normalizing.
+        self.sentences_et = [np.nan_to_num(self.normalizer.transform(s))
+                             for s in self.sentences_et]
 
-# TO-DO: Check value deviations of the corpuses!
-# TO-DO: Confirm that the scaler squashes the values [-1, 1]
+    def print_stats(self, arr):
+        print('\n' + self.name, 'ET minimum values:', np.nanmin(arr, 1))
+        print(self.name, 'ET maximum values:', np.nanmax(arr, 1))
+
+        # for StandardScaler:
+        # print('Normalizer var:', self.normalizer.var_)
+        # print('Normalizer mean:', self.normalizer.mean_)
+
+        # for MinMaxScaler:
+        print('Normalizer min_:', self.normalizer.min_)
+        print('Normalizer scale_:', self.normalizer.scale_)
+        print('Normalizer data_min_:', self.normalizer.data_min_)
+        print('Normalizer data_max_:', self.normalizer.data_max_)
+        print('Normalizer data_range_:', self.normalizer.data_range_)
 
 
 class ZuCo_Sentiment(Corpus):
     def __init__(self):
         self.name = 'ZuCo_Sentiment'
         self.directory = '../data/ZuCo_Sentiment/sentences'
-        self.load_corpus()
+        super(ZuCo_Sentiment, self).__init__()
         self.load_et_features()
 
     def load_corpus(self):
@@ -71,7 +86,6 @@ class ZuCo_Sentiment(Corpus):
 
     def load_et_features(self):
         self.sentences_et = []
-        self.normalizer = StandardScaler()
         sentence_et_features = np.load(
             '../data/ZuCo_Sentiment/task1_sentence_features.npy',
             allow_pickle=True)
@@ -86,33 +100,28 @@ class ZuCo_Sentiment(Corpus):
                                      word['GD'],
                                      word['GPT']])
 
-                # make NaN fixations be 0.
-                # THIS DESTROYS NORMALIZER VAR, NEED TO CHECK WHY
-                # features[0] = np.nan_to_num(features[0])
-                # import pdb; pdb.set_trace()
+                if not np.isnan(features).all():
+                    # make NaN fixations be 0.
+                    features[0] = np.nan_to_num(features[0])
 
-                for i in range(5):
-                    _feature_values[i].extend(features[i])
-
-                if not np.all(np.isnan(features)):
-                    # sklearn's StandardScaler reads the 2nd axis as the
+                    for i in range(5):
+                        _feature_values[i].extend(features[i])
+                    # sklearn's scaler reads the 2nd axis as the
                     # features. The input to fit/transform should be (11, 5)
                     self.normalizer.partial_fit(features.T)
                     sentence_et.append(np.nanmean(features, axis=1))
+
                 else:  # when a word does not have any recorded ET feature
                     sentence_et.append(np.array([np.nan] * 5))
 
             self.sentences_et.append(np.array(sentence_et))
 
         self.print_stats(np.array(_feature_values))
-
-        # We keep the NaN values at first so that it doesn't mess up
-        # the normalization process.
-        # Let's only convert them to 0s after normalizing.
-        self.sentences_et = [np.nan_to_num(self.normalizer.transform(s))
-                             for s in self.sentences_et]
+        self.normalize_et()
 
 
+# TO-DO: Adjust sentence extraction. I should be getting
+# around 5k separate sentences! Right now I'm getting around 3.3k
 class GECO(Corpus):
     """
     Task material: the novel 'The Mysterious Affair at Styles' by Agatha
@@ -132,12 +141,11 @@ class GECO(Corpus):
             'GD': 'WORD_GAZE_DURATION',
             'GPT': 'WORD_GO_PAST_TIME'
         }
-        self.load_corpus()
+        super(GECO, self).__init__()
 
     def load_corpus(self):
         self.sentences = []
         self.sentences_et = []
-        self.normalizer = StandardScaler()
 
         _feature_values = [[], [], [], [], []]
         geco_df = pd.read_excel(self.directory)
@@ -167,8 +175,6 @@ class GECO(Corpus):
                         for i in range(5):
                             _feature_values[i].extend(features.T[i])
                         self.normalizer.partial_fit(features)
-                        if np.isnan(self.normalizer.var_).any():
-                            import pdb; pdb.set_trace()
 
                     sentence_et.append(np.nanmean(features, axis=0))
                     if (word.endswith('.') and
@@ -184,8 +190,7 @@ class GECO(Corpus):
         self.print_stats(np.array(_feature_values))
 
         # after going through the data set, normalize.
-        self.sentences_et = [np.nan_to_num(self.normalizer.transform(s))
-                             for s in self.sentences_et]
+        self.normalize_et()
 
 
 class PROVO(Corpus):
@@ -214,12 +219,11 @@ class PROVO(Corpus):
             'GD': 'IA_FIRST_RUN_DWELL_TIME',
             'GPT': 'IA_REGRESSION_PATH_DURATION'
         }
-        self.load_corpus()
+        super(PROVO, self).__init__()
 
     def load_corpus(self):  # Flow of this extraction is similar to ZuCo.
         self.sentences = []
         self.sentences_et = []
-        self.normalizer = StandardScaler()
 
         # csv has 230413 lines!
         provo_df = pd.read_csv(self.directory)
@@ -257,9 +261,7 @@ class PROVO(Corpus):
                 self.sentences_et.append(np.array(sentence_et))
 
         self.print_stats(np.array(_feature_values))
-        # after going through the data set, normalize.
-        self.sentences_et = [np.nan_to_num(self.normalizer.transform(s))
-                             for s in self.sentences_et]
+        self.normalize_et()
 
 
 class NaturalStories(Corpus):
@@ -286,11 +288,10 @@ corpus_classes = {
     'PROVO': PROVO,
     'GECO': GECO
 }
-# TO-DO: remove normalization code! (??)
 
 
 class CorpusAggregator(Dataset):
-    def __init__(self, corpus_list=['ZuCo', 'PROVO']):
+    def __init__(self, corpus_list):
         print('Corpuses to use:', corpus_list, 'Loading...')
 
         self.corpuses = {}
