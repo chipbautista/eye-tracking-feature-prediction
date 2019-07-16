@@ -12,8 +12,10 @@ from settings import BATCH_SIZE
 
 
 class Corpus(Dataset):
-    def __init__(self):
-        self.normalizer = MinMaxScaler(feature_range=(-1, 1))
+    def __init__(self, normalize):
+        self.normalize = normalize
+        if self.normalize:
+            self.normalizer = MinMaxScaler()
         self.load_corpus()
 
     def clean_str(self, string):
@@ -70,10 +72,10 @@ class Corpus(Dataset):
 
 
 class ZuCo_Sentiment(Corpus):
-    def __init__(self):
+    def __init__(self, normalize=True):
         self.name = 'ZuCo_Sentiment'
         self.directory = '../data/ZuCo_Sentiment/sentences'
-        super(ZuCo_Sentiment, self).__init__()
+        super(ZuCo_Sentiment, self).__init__(normalize)
         self.load_et_features()
 
     def load_corpus(self):
@@ -106,9 +108,12 @@ class ZuCo_Sentiment(Corpus):
 
                     for i in range(5):
                         _feature_values[i].extend(features[i])
-                    # sklearn's scaler reads the 2nd axis as the
-                    # features. The input to fit/transform should be (11, 5)
-                    self.normalizer.partial_fit(features.T)
+
+                    if self.normalize:
+                        # sklearn's scaler reads the 2nd axis as the
+                        # features. The input to fit/transform should be (11, 5)
+                        self.normalizer.partial_fit(features.T)
+
                     sentence_et.append(np.nanmean(features, axis=1))
 
                 else:  # when a word does not have any recorded ET feature
@@ -116,8 +121,9 @@ class ZuCo_Sentiment(Corpus):
 
             self.sentences_et.append(np.array(sentence_et))
 
-        self.print_stats(np.array(_feature_values))
-        self.normalize_et()
+        if self.normalize:
+            self.print_stats(np.array(_feature_values))
+            self.normalize_et()
 
 
 # TO-DO: Adjust sentence extraction. I should be getting
@@ -131,7 +137,7 @@ class GECO(Corpus):
     (I got to extract only 3,386, though... I may need to modify my
     method of separating each trial into sentences...)
     """
-    def __init__(self):
+    def __init__(self, normalize=True):
         self.name = 'GECO'
         self.directory = '../data/GECO Corpus/MonolingualReadingData.xlsx'
         self.et_features = {
@@ -141,7 +147,7 @@ class GECO(Corpus):
             'GD': 'WORD_GAZE_DURATION',
             'GPT': 'WORD_GO_PAST_TIME'
         }
-        super(GECO, self).__init__()
+        super(GECO, self).__init__(normalize)
 
     def load_corpus(self):
         self.sentences = []
@@ -174,7 +180,8 @@ class GECO(Corpus):
                     if np.nan_to_num(features).any():
                         for i in range(5):
                             _feature_values[i].extend(features.T[i])
-                        self.normalizer.partial_fit(features)
+                        if self.normalize:
+                            self.normalizer.partial_fit(features)
 
                     sentence_et.append(np.nanmean(features, axis=0))
                     if (word.endswith('.') and
@@ -187,10 +194,9 @@ class GECO(Corpus):
                         sentence_words = []
                         sentence_et = []
 
-        self.print_stats(np.array(_feature_values))
-
-        # after going through the data set, normalize.
-        self.normalize_et()
+        if self.normalize:
+            self.print_stats(np.array(_feature_values))
+            self.normalize_et()
 
 
 class PROVO(Corpus):
@@ -209,7 +215,7 @@ class PROVO(Corpus):
     1,192 vocabulary size (cleaned words)
     134 sentences
     """
-    def __init__(self):
+    def __init__(self, normalize=True):
         self.name = 'PROVO'
         self.directory = '../data/PROVO Corpus/Provo_Corpus-Eyetracking_Data.csv'
         self.et_features = {
@@ -219,7 +225,7 @@ class PROVO(Corpus):
             'GD': 'IA_FIRST_RUN_DWELL_TIME',
             'GPT': 'IA_REGRESSION_PATH_DURATION'
         }
-        super(PROVO, self).__init__()
+        super(PROVO, self).__init__(normalize)
 
     def load_corpus(self):  # Flow of this extraction is similar to ZuCo.
         self.sentences = []
@@ -253,15 +259,18 @@ class PROVO(Corpus):
                     for i in range(5):
                         _feature_values[i].extend(features.T[i])
 
-                    self.normalizer.partial_fit(features)
-                    # i think this next line triggers the 
+                    if self.normalize:
+                        self.normalizer.partial_fit(features)
+
+                    # i think this next line triggers the
                     # TO-DO: add code that doesn't do this if the values
                     # are none. To save on RuntimeWarning outputs...?
                     sentence_et.append(np.nanmean(features, axis=0))
                 self.sentences_et.append(np.array(sentence_et))
 
-        self.print_stats(np.array(_feature_values))
-        self.normalize_et()
+        if self.normalize:
+            self.print_stats(np.array(_feature_values))
+            self.normalize_et()
 
 
 class NaturalStories(Corpus):
@@ -291,15 +300,17 @@ corpus_classes = {
 
 
 class CorpusAggregator(Dataset):
-    def __init__(self, corpus_list):
+    def __init__(self, corpus_list, normalize=False):
         print('Corpuses to use:', corpus_list, 'Loading...')
+
+        normalize_aggregate = (normalize is not False)
 
         self.corpuses = {}
         self.sentences = []
         self.et_targets = []
         # instantiate the classes
         for corpus in corpus_list:
-            corpus_ = corpus_classes[corpus]()
+            corpus_ = corpus_classes[corpus](not normalize_aggregate)
             self.sentences.extend(corpus_.sentences)
             self.et_targets.extend(corpus_.sentences_et)
             self.corpuses[corpus] = corpus_
@@ -310,6 +321,23 @@ class CorpusAggregator(Dataset):
         # with the sentiment analysis prog!
         self.vocabulary = dict(zip(vocab, range(1, len(vocab) + 1)))
         self.vocabulary.update({'': 0})
+        print('Num of words in vocabulary:', len(self.vocabulary))
+
+        if normalize_aggregate:
+            self.normalizer = MinMaxScaler()
+
+            # ugly way to "flatten" the values into shape (N, 5) though :(
+            feature_values = []
+            for sent_et in self.et_targets:
+                feature_values.extend(sent_et)
+            self.normalizer.fit(np.array(feature_values))
+
+            # a bit inefficient to do this but oh well...
+            self.et_targets = [np.nan_to_num(self.normalizer.transform(s))
+                               for s in self.et_targets]
+            self.et_targets_original = np.copy(self.et_targets)
+            self.et_targets = [self.normalizer.transform(s)
+                               for s in self.et_targets]
 
         self.indexed_sentences = np.array([
             [self.vocabulary[w] for w in sentence]
@@ -327,7 +355,8 @@ class CorpusAggregator(Dataset):
         indices = np.array(indices)
         dataset = _SplitDataset(self.max_seq_len,
                                 self.indexed_sentences[indices],
-                                self.et_targets[indices])
+                                self.et_targets[indices],
+                                self.et_targets_original[indices])
         return torch.utils.data.DataLoader(
             dataset, batch_size=BATCH_SIZE, shuffle=True)
 
@@ -337,10 +366,12 @@ class CorpusAggregator(Dataset):
 
 class _SplitDataset(Dataset):
     """Send the train/test indices here and use as input to DataLoader."""
-    def __init__(self, max_seq_len, indexed_sentences, targets):
+    def __init__(self, max_seq_len, indexed_sentences,
+                 targets, targets_original):
         self.max_seq_len = max_seq_len
         self.indexed_sentences = indexed_sentences
         self.targets = targets
+        self.targets_original = targets_original
 
     def __len__(self):
         return len(self.indexed_sentences)
@@ -351,7 +382,9 @@ class _SplitDataset(Dataset):
                          (0, missing_dims))
         et_target = F.pad(torch.Tensor(self.targets[i]),
                           (0, 0, 0, missing_dims))
-        return sentence, et_target
+        et_target_original = F.pad(torch.Tensor(self.targets_original[i]),
+                                   (0, 0, 0, missing_dims))
+        return sentence, et_target, et_target_original
 
     # def __getitem__(self, idx):
     #     return (self.indexed_sentences[idx], self.targets[idx])

@@ -11,8 +11,17 @@ from settings import *
 
 def iterate(dataloader, train=True):
     epoch_loss = 0.0
-    for i, (sentences, et_targets) in enumerate(dataloader):
+    # loss calculated on the real/original values (not scaled)
+    epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
+    for i, (sentences, et_targets, et_targets_orig) in enumerate(dataloader):
+        if USE_CUDA:
+            sentences = sentences.cuda()
+            et_targets = et_targets.cuda()
+
         et_preds = model(sentences.type(torch.LongTensor))
+        et_preds_inverse = torch.Tensor(
+            [dataset.normalizer.inverse_transform(x)
+             for x in et_preds.detach().cpu().numpy()])
 
         # starting from the padding index, make the prediction values 0
         for sent, et_pred in zip(sentences, et_preds):
@@ -21,7 +30,13 @@ def iterate(dataloader, train=True):
             except IndexError:
                 pad_start_idx = None
             et_pred[pad_start_idx:] = 0
-        loss = mse_loss(et_preds, et_targets)
+            et_preds_inverse[pad_start_idx:] = 0
+
+        loss = torch.sqrt(mse_loss(et_preds, et_targets))
+        # calculate the loss PER FEATURE
+        loss_ = torch.Tensor(
+            [mse_loss(et_preds_inverse[:, i], et_targets_orig[:, i]).item()
+             for i in range(5)])
 
         if train:
             optimizer.zero_grad()
@@ -29,17 +44,20 @@ def iterate(dataloader, train=True):
             optimizer.step()
 
         epoch_loss += loss.item()
-    return epoch_loss / (i + 1)
+        epoch_loss_ += loss_
+    return epoch_loss / (i + 1), epoch_loss_ / (i + 1)
 
 
 parser = ArgumentParser()
 parser.add_argument('--zuco', default=False)
 parser.add_argument('--provo', default=False)
 parser.add_argument('--geco', default=False)
+parser.add_argument('--normalize-aggregate', default=True)
+parser.add_argument('--calculate-inverse-loss', default=True)
 args = parser.parse_args()
 
 if args.zuco is False and args.provo is False and args.geco is False:
-    corpus_list = ['ZuCo', 'PROVO', 'GECO']  # add GECO later
+    corpus_list = ['ZuCo', 'PROVO', 'GECO']  # add UCL later?
 else:
     corpus_list = []
     if args.zuco is not False:
@@ -49,7 +67,7 @@ else:
     if args.geco is not False:
         corpus_list.append('GECO')
 
-dataset = CorpusAggregator(corpus_list)
+dataset = CorpusAggregator(corpus_list, args.normalize_aggregate)
 initial_word_embedding = init_word_embedding_from_word2vec(
     dataset.vocabulary.keys())
 mse_loss = torch.nn.MSELoss()
@@ -62,6 +80,7 @@ print('Number of sentences:', len(dataset))
 print('\n--- Starting training (10-CV) ---')
 
 te_losses = []
+te_losses_ = []
 for k, (train_loader, test_loader) in enumerate(dataset.split_cross_val()):
     _start_time = time.time()
     model = EyeTrackingPredictor(initial_word_embedding.clone(),
@@ -71,18 +90,31 @@ for k, (train_loader, test_loader) in enumerate(dataset.split_cross_val()):
         model = model.cuda()
 
     e_tr_losses = []
+    e_tr_losses_ = []
     e_te_losses = []
+    e_te_losses_ = []
     for e in range(NUM_EPOCHS):
-        train_loss = iterate(train_loader)
-        test_loss = iterate(test_loader, train=False)
+        train_loss, train_loss_ = iterate(train_loader)
+        test_loss, test_loss_ = iterate(test_loader, train=False)
         e_tr_losses.append(train_loss)
+        e_tr_losses_.append(train_loss_)
         e_te_losses.append(test_loss)
-        print(k, e, train_loss, test_loss)
+        e_te_losses_.append(test_loss_)
+
+        print('k:', k, 'e:', e,
+              '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
+        # print(train_loss_)
+        # print(test_loss_)
 
     best_epoch = np.argmin(e_te_losses)
     te_losses.append(e_te_losses[best_epoch])
-    print(k, e,'- Train MSE: {:.2f}'.format(e_tr_losses[best_epoch]),
-          'Test MSE: {:.2f} '.format(e_te_losses[best_epoch]),
+    te_losses_.append(e_te_losses_[best_epoch])
+    print(k, e, '- Train rMSE: {:.5f}'.format(e_tr_losses[best_epoch]),
+          'Test rMSE: {:.5f} '.format(e_te_losses[best_epoch]),
           '({:.2f}s)'.format(time.time() - _start_time))
+    print('Train MSE_:', e_tr_losses_[best_epoch])
+    print('Test MSE_:', e_te_losses_[best_epoch])
 
 print('\nCV Mean Test Loss:', np.mean(te_losses))
+print(np.mean(te_losses_, 1))
+

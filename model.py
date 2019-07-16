@@ -17,6 +17,7 @@ class EyeTrackingPredictor(torch.nn.Module):
             num_layers=1, batch_first=True, bidirectional=True
         )
         self.dropout = torch.nn.Dropout(p=DROPOUT_PROB)
+        # try adding another layer here?
         self.out = torch.nn.Linear(
             in_features=LSTM_HIDDEN_UNITS * 2,
             out_features=len(ET_FEATURES)
@@ -49,7 +50,7 @@ def init_word_embedding_from_word2vec(vocabulary):
         try:
             embeddings.append(pretrained_w2v[word])
         except KeyError:
-            embeddings.append(np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM))
+            embeddings.append(np.random.uniform(-1.0, 1.0, WORD_EMBED_DIM))
             oov_words.append(word)
 
     print('>', len(oov_words), 'words were not found in the pre-trained model.\n')
