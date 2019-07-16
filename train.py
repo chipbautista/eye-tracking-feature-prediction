@@ -14,11 +14,12 @@ def iterate(dataloader, train=True):
     # loss calculated on the real/original values (not scaled)
     epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
     for i, (sentences, et_targets, et_targets_orig) in enumerate(dataloader):
+        sentences = sentences.type(torch.LongTensor)
         if USE_CUDA:
             sentences = sentences.cuda()
             et_targets = et_targets.cuda()
 
-        et_preds = model(sentences.type(torch.LongTensor))
+        et_preds = model(sentences)
         et_preds_inverse = torch.Tensor(
             [dataset.normalizer.inverse_transform(x)
              for x in et_preds.detach().cpu().numpy()])
@@ -26,7 +27,7 @@ def iterate(dataloader, train=True):
         # starting from the padding index, make the prediction values 0
         for sent, et_pred in zip(sentences, et_preds):
             try:
-                pad_start_idx = np.where(sent.numpy() == 0)[0][0]
+                pad_start_idx = np.where(sent.cpu().numpy() == 0)[0][0]
             except IndexError:
                 pad_start_idx = None
             et_pred[pad_start_idx:] = 0
@@ -101,8 +102,8 @@ for k, (train_loader, test_loader) in enumerate(dataset.split_cross_val()):
         e_te_losses.append(test_loss)
         e_te_losses_.append(test_loss_)
 
-        print('k:', k, 'e:', e,
-              '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
+        # print('k:', k, 'e:', e,
+        #       '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
         # print(train_loss_)
         # print(test_loss_)
 
