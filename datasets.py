@@ -27,28 +27,26 @@ class Corpus(Dataset):
         (removes 'words' such as '...' that actually have ET features!)
         """
         # string = string.replace(".", "")
-        string = re.sub(r'([\w ])(\.)+', r'\1', string)
+        string = re.sub(r'([\w ])(\.)+', r'\1', string.strip().lower())
         string = string.replace(",", "")
         string = string.replace("--", "")
-        string = string.replace("`", "")
         string = string.replace("''", "")
-        string = string.replace('"', "")
-        string = string.replace("' ", " ")
+        # string = string.replace("' ", "")
         # string = string.replace(" '", " ")
         string = re.sub(r"'\s?$", '', string)
-        # string = string.replace("*", "")
-        # string = string.replace("\\", "")
-        # string = string.replace(";", "")
         # string = string.replace("- ", " ")
-        # string = string.replace("/", "-")
-        # string = string.replace("!", "")
-        # string = string.replace("?", "")
-        string = re.sub(r'[?!/;*()\`:&]', '', string)
+        string = re.sub(r'[?!/;*()\\`:&"]', '', string)
 
         string = re.sub(r"\s{2,}", " ", string)
-        if string.endswith('.'):
-            string = string[:-1]
-        return string.strip().lower()
+
+        # remove '...' or "'" at start or end
+        string = re.sub(r"(^'|'$|^\.{1,3}|\.{1,3}$)", '', string)
+
+        # remove apostrophes that are not followed by an alphabet
+        # may be unnecessary though
+        # string = re.sub(r"'([^a-z])", r"\1", string)
+
+        return string
 
     def normalize_et(self):
         # We keep the NaN values at first so that it doesn't mess up
@@ -289,7 +287,7 @@ class CorpusAggregator(Dataset):
         print('Num of words in vocabulary:', len(self.vocabulary))
 
         if normalize_aggregate:
-            self.normalizer = MinMaxScaler()
+            self.normalizer = StandardScaler()
 
             # ugly way to "flatten" the values into shape (N, 5) though :(
             feature_values = []
@@ -298,8 +296,7 @@ class CorpusAggregator(Dataset):
             self.normalizer.fit(np.array(feature_values))
 
             # a bit inefficient to do this but oh well...
-            self.et_targets = [np.nan_to_num(self.normalizer.transform(s))
-                               for s in self.et_targets]
+            self.et_targets = [np.nan_to_num(s) for s in self.et_targets]
             self.et_targets_original = np.copy(self.et_targets)
             self.et_targets = [self.normalizer.transform(s)
                                for s in self.et_targets]
@@ -355,7 +352,8 @@ class _SplitDataset(Dataset):
 
 
 def print_normalizer_stats(caller, normalizer):
-    print('\n--- {} Normalizer Stats ---'.format(caller.__class__.__name__))
+    print('\n--- {} {} Normalizer Stats ---'.format(
+        caller.__class__.__name__, normalizer.__class__.__name__))
     if normalizer.__class__.__name__ == 'MinMaxScaler':
         print('min_:', normalizer.min_)
         print('scale_:', normalizer.scale_)

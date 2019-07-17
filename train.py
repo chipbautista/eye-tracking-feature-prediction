@@ -13,6 +13,7 @@ def iterate(dataloader, train=True):
     epoch_loss = 0.0
     # loss calculated on the real/original values (not scaled)
     epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
+    loss_ = 0  # placeholder to avoid errors
     for i, (sentences, et_targets, et_targets_orig) in enumerate(dataloader):
         sentences = sentences.type(torch.LongTensor)
         if USE_CUDA:
@@ -25,19 +26,22 @@ def iterate(dataloader, train=True):
              for x in et_preds.detach().cpu().numpy()])
 
         # starting from the padding index, make the prediction values 0
-        for sent, et_pred in zip(sentences, et_preds):
+        for sent, et_pred, et_pred_inverse in zip(
+                sentences, et_preds, et_preds_inverse):
             try:
                 pad_start_idx = np.where(sent.cpu().numpy() == 0)[0][0]
             except IndexError:
                 pad_start_idx = None
             et_pred[pad_start_idx:] = 0
-            et_preds_inverse[pad_start_idx:] = 0
+            et_pred_inverse[pad_start_idx:] = 0
 
         loss = torch.sqrt(mse_loss(et_preds, et_targets))
+
         # calculate the loss PER FEATURE
-        loss_ = torch.Tensor(
-            [mse_loss(et_preds_inverse[:, i], et_targets_orig[:, i]).item()
-             for i in range(5)])
+        loss_ = torch.sqrt(torch.Tensor(
+            [mse_loss(et_preds_inverse[:, :, i],
+                      et_targets_orig[:, :, i]).item()
+             for i in range(5)]))
 
         if train:
             optimizer.zero_grad()
@@ -71,8 +75,8 @@ else:
 dataset = CorpusAggregator(corpus_list, args.normalize_aggregate)
 initial_word_embedding = init_word_embedding_from_word2vec(
     dataset.vocabulary.keys())
-# mse_loss = torch.nn.MSELoss()
-mse_loss = torch.nn.L1Loss()
+mse_loss = torch.nn.MSELoss()
+# mse_loss = torch.nn.L1Loss()
 
 print('--- PARAMETERS ---')
 print('Learning Rate:', INITIAL_LR)
@@ -107,8 +111,8 @@ for k, (train_loader, test_loader) in enumerate(dataset.split_cross_val()):
         e_te_losses.append(test_loss)
         e_te_losses_.append(test_loss_)
 
-        # print('k:', k, 'e:', e,
-        #       '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
+        print('k:', k, 'e:', e,
+              '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
         # print(train_loss_)
         # print(test_loss_)
 
