@@ -71,7 +71,8 @@ else:
 dataset = CorpusAggregator(corpus_list, args.normalize_aggregate)
 initial_word_embedding = init_word_embedding_from_word2vec(
     dataset.vocabulary.keys())
-mse_loss = torch.nn.MSELoss()
+# mse_loss = torch.nn.MSELoss()
+mse_loss = torch.nn.L1Loss()
 
 print('--- PARAMETERS ---')
 print('Learning Rate:', INITIAL_LR)
@@ -83,6 +84,10 @@ print('\n--- Starting training (10-CV) ---')
 te_losses = []
 te_losses_ = []
 for k, (train_loader, test_loader) in enumerate(dataset.split_cross_val()):
+    if k == 0:
+        print('Train #batches:', len(train_loader))
+        print('Test #batches:', len(test_loader))
+
     _start_time = time.time()
     model = EyeTrackingPredictor(initial_word_embedding.clone(),
                                  dataset.max_seq_len)
@@ -110,12 +115,12 @@ for k, (train_loader, test_loader) in enumerate(dataset.split_cross_val()):
     best_epoch = np.argmin(e_te_losses)
     te_losses.append(e_te_losses[best_epoch])
     te_losses_.append(e_te_losses_[best_epoch])
-    print(k, e, '- Train rMSE: {:.5f}'.format(e_tr_losses[best_epoch]),
+    print(k, '[e={}] '.format(best_epoch),
+          '- Train rMSE: {:.5f}'.format(e_tr_losses[best_epoch]),
           'Test rMSE: {:.5f} '.format(e_te_losses[best_epoch]),
           '({:.2f}s)'.format(time.time() - _start_time))
     print('Train MSE_:', e_tr_losses_[best_epoch])
     print('Test MSE_:', e_te_losses_[best_epoch])
 
 print('\nCV Mean Test Loss:', np.mean(te_losses))
-print(np.mean(te_losses_, 1))
-
+print(torch.stack(te_losses_).mean(0))

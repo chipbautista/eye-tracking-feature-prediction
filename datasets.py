@@ -15,7 +15,7 @@ class Corpus(Dataset):
     def __init__(self, normalize):
         self.normalize = normalize
         if self.normalize:
-            self.normalizer = MinMaxScaler()
+            self.normalizer = StandardScaler()
         self.load_corpus()
 
     def clean_str(self, string):
@@ -29,7 +29,7 @@ class Corpus(Dataset):
         # string = string.replace(".", "")
         string = re.sub(r'([\w ])(\.)+', r'\1', string)
         string = string.replace(",", "")
-        # string = string.replace("--", "")
+        string = string.replace("--", "")
         string = string.replace("`", "")
         string = string.replace("''", "")
         string = string.replace('"', "")
@@ -37,15 +37,17 @@ class Corpus(Dataset):
         # string = string.replace(" '", " ")
         string = re.sub(r"'\s?$", '', string)
         # string = string.replace("*", "")
-        string = string.replace("\\", "")
-        string = string.replace(";", "")
+        # string = string.replace("\\", "")
+        # string = string.replace(";", "")
         # string = string.replace("- ", " ")
-        string = string.replace("/", "-")
-        string = string.replace("!", "")
-        string = string.replace("?", "")
+        # string = string.replace("/", "-")
+        # string = string.replace("!", "")
+        # string = string.replace("?", "")
+        string = re.sub(r'[?!/;*()\`:&]', '', string)
 
         string = re.sub(r"\s{2,}", " ", string)
-
+        if string.endswith('.'):
+            string = string[:-1]
         return string.strip().lower()
 
     def normalize_et(self):
@@ -58,68 +60,43 @@ class Corpus(Dataset):
     def print_stats(self, arr):
         print('\n' + self.name, 'ET minimum values:', np.nanmin(arr, 1))
         print(self.name, 'ET maximum values:', np.nanmax(arr, 1))
-
-        # for StandardScaler:
-        # print('Normalizer var:', self.normalizer.var_)
-        # print('Normalizer mean:', self.normalizer.mean_)
-
-        # for MinMaxScaler:
-        print('Normalizer min_:', self.normalizer.min_)
-        print('Normalizer scale_:', self.normalizer.scale_)
-        print('Normalizer data_min_:', self.normalizer.data_min_)
-        print('Normalizer data_max_:', self.normalizer.data_max_)
-        print('Normalizer data_range_:', self.normalizer.data_range_)
+        print_normalizer_stats(self, self.normalizer)
 
 
-class ZuCo_Sentiment(Corpus):
-    def __init__(self, normalize=True):
-        self.name = 'ZuCo_Sentiment'
-        self.directory = '../data/ZuCo_Sentiment/sentences'
-        super(ZuCo_Sentiment, self).__init__(normalize)
-        self.load_et_features()
+class ZuCo(Corpus):
+    def __init__(self, normalize=True, task='sentiment'):
+        self.name = 'ZuCo'
+
+        if task == 'sentiment':
+            task_code = '_SR'
+        elif task == 'normal':
+            task_code = '_NR'
+        else:
+            task_code = '_TSR'
+
+        self.directory = '../data/ZuCo/et_features{}.npy'.format(task_code)
+        self.et_features = ['nFixations', 'FFD', 'TRT', 'GD', 'GPT']
+        super(ZuCo, self).__init__(normalize)
 
     def load_corpus(self):
-        zuco_df = pd.read_csv(
-            '../data/ZuCo/task_materials/sentiment_labels_task1.csv',
-            sep=';', skiprows=[1])
-        self.sentences = [self.clean_str(s).split()
-                          for s in zuco_df['sentence'].values]
-        self.num_sentences = len(self.sentences)
-
-    def load_et_features(self):
+        self.sentences = []
         self.sentences_et = []
-        sentence_et_features = np.load(
-            '../data/ZuCo_Sentiment/task1_sentence_features.npy',
-            allow_pickle=True)
-
         _feature_values = [[], [], [], [], []]
-        for si, sentence in enumerate(sentence_et_features):  # 400 of these
-            sentence_et = []
-            for word in sentence:
-                features = np.array([word['nFixations'],
-                                     word['FFD'],
-                                     word['TRT'],
-                                     word['GD'],
-                                     word['GPT']])
 
-                if not np.isnan(features).all():
-                    # make NaN fixations be 0.
-                    features[0] = np.nan_to_num(features[0])
+        sentences = np.load(self.directory, allow_pickle=True)
+        for sentence in sentences:
+            self.sentences.append([self.clean_str(w)
+                                   for w in sentence['words']])
+            features = np.array([sentence[f] for f in self.et_features])
 
-                    for i in range(5):
-                        _feature_values[i].extend(features[i])
+            features[0] = np.nan_to_num(features[0])
+            for i in range(5):
+                _feature_values[i].extend(features.reshape(5, -1)[i])
 
-                    if self.normalize:
-                        # sklearn's scaler reads the 2nd axis as the
-                        # features. The input to fit/transform should be (11, 5)
-                        self.normalizer.partial_fit(features.T)
-
-                    sentence_et.append(np.nanmean(features, axis=1))
-
-                else:  # when a word does not have any recorded ET feature
-                    sentence_et.append(np.array([np.nan] * 5))
-
-            self.sentences_et.append(np.array(sentence_et))
+            features = np.nanmean(features.T, axis=1)
+            if self.normalize:
+                self.normalizer.partial_fit(features)
+            self.sentences_et.append(features)
 
         if self.normalize:
             self.print_stats(np.array(_feature_values))
@@ -177,17 +154,19 @@ class GECO(Corpus):
                     features[features == '.'] = np.NaN
                     features = features.astype(float)
 
+                    features_mean = np.nanmean(features, axis=0)
                     if np.nan_to_num(features).any():
                         for i in range(5):
                             _feature_values[i].extend(features.T[i])
                         if self.normalize:
-                            self.normalizer.partial_fit(features)
+                            self.normalizer.partial_fit(features_mean)
 
-                    sentence_et.append(np.nanmean(features, axis=0))
+                    sentence_et.append(features_mean)
+
+                    # consider this a complete sentence and append
+                    # to the final list.
                     if (word.endswith('.') and
                             word.lower()[-4:] not in ['mrs.', ' mr.']):
-                        # consider this a complete sentence and append
-                        # to the final list.
                         self.sentences.append([self.clean_str(w)
                                                for w in sentence_words])
                         self.sentences_et.append(np.array(sentence_et))
@@ -259,13 +238,14 @@ class PROVO(Corpus):
                     for i in range(5):
                         _feature_values[i].extend(features.T[i])
 
+                    features = np.nanmean(features, axis=0)
                     if self.normalize:
                         self.normalizer.partial_fit(features)
 
                     # i think this next line triggers the
                     # TO-DO: add code that doesn't do this if the values
                     # are none. To save on RuntimeWarning outputs...?
-                    sentence_et.append(np.nanmean(features, axis=0))
+                    sentence_et.append(features)
                 self.sentences_et.append(np.array(sentence_et))
 
         if self.normalize:
@@ -273,27 +253,13 @@ class PROVO(Corpus):
             self.normalize_et()
 
 
-class NaturalStories(Corpus):
-    pass
-
-
 class UCL(Corpus):
     # txt
     pass
 
 
-class IITB_Sentiment(Corpus):
-    # csv
-    pass
-
-
-class IITB_Complexity(Dataset):
-    # csv
-    pass
-
-
 corpus_classes = {
-    'ZuCo': ZuCo_Sentiment,
+    'ZuCo': ZuCo,
     'PROVO': PROVO,
     'GECO': GECO
 }
@@ -308,6 +274,7 @@ class CorpusAggregator(Dataset):
         self.corpuses = {}
         self.sentences = []
         self.et_targets = []
+
         # instantiate the classes
         for corpus in corpus_list:
             corpus_ = corpus_classes[corpus](not normalize_aggregate)
@@ -317,8 +284,6 @@ class CorpusAggregator(Dataset):
 
         self.max_seq_len = max([len(s) for s in self.sentences])
         vocab = set(np.hstack(self.sentences))
-        # TO-DO: Check if the number of words in vocab matches (more or less)
-        # with the sentiment analysis prog!
         self.vocabulary = dict(zip(vocab, range(1, len(vocab) + 1)))
         self.vocabulary.update({'': 0})
         print('Num of words in vocabulary:', len(self.vocabulary))
@@ -338,6 +303,7 @@ class CorpusAggregator(Dataset):
             self.et_targets_original = np.copy(self.et_targets)
             self.et_targets = [self.normalizer.transform(s)
                                for s in self.et_targets]
+            print_normalizer_stats(self, self.normalizer)
 
         self.indexed_sentences = np.array([
             [self.vocabulary[w] for w in sentence]
@@ -349,16 +315,17 @@ class CorpusAggregator(Dataset):
         splitter = cv.split(np.zeros(len(self.sentences)))
         for train_indices, test_indices in splitter:
             yield (self._get_dataloader(train_indices),
-                   self._get_dataloader(test_indices))
+                   self._get_dataloader(test_indices, False))
 
-    def _get_dataloader(self, indices):
+    def _get_dataloader(self, indices, train=True):
+        batch_size = BATCH_SIZE if train else len(indices)
         indices = np.array(indices)
         dataset = _SplitDataset(self.max_seq_len,
                                 self.indexed_sentences[indices],
                                 self.et_targets[indices],
                                 self.et_targets_original[indices])
         return torch.utils.data.DataLoader(
-            dataset, batch_size=BATCH_SIZE, shuffle=True)
+            dataset, batch_size=batch_size, shuffle=True)
 
     def __len__(self):
         return len(self.sentences)
@@ -386,5 +353,15 @@ class _SplitDataset(Dataset):
                                    (0, 0, 0, missing_dims))
         return sentence, et_target, et_target_original
 
-    # def __getitem__(self, idx):
-    #     return (self.indexed_sentences[idx], self.targets[idx])
+
+def print_normalizer_stats(caller, normalizer):
+    print('\n--- {} Normalizer Stats ---'.format(caller.__class__.__name__))
+    if normalizer.__class__.__name__ == 'MinMaxScaler':
+        print('min_:', normalizer.min_)
+        print('scale_:', normalizer.scale_)
+        print('data_min_:', normalizer.data_min_)
+        print('data_max_:', normalizer.data_max_)
+        print('data_range_:', normalizer.data_range_)
+    else:
+        print('var:', normalizer.var_)
+        print('mean:', normalizer.mean_)

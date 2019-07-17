@@ -3,7 +3,7 @@ USE_CUDA = cuda.is_available()
 
 ET_FEATURES = ['FFD', 'GD', 'TRT', 'nFixations', 'GPT']
 
-LSTM_HIDDEN_UNITS = 256
+LSTM_HIDDEN_UNITS = 32
 
 NUM_EPOCHS = 40
 BATCH_SIZE = 32
@@ -14,4 +14,3 @@ WORD_EMBED_DIM = 300
 
 # Directories
 WORD_EMBED_MODEL_DIR = 'models/GoogleNews-vectors-negative300.bin'
-INITIAL_WORD_EMBED_DIR = 'models/initial_word_embeddings.npy'
