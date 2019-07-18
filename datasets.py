@@ -13,6 +13,8 @@ from settings import BATCH_SIZE, LOAD_GECO_FROM_FILE
 
 class Corpus(Dataset):
     def __init__(self, normalize):
+        self.sentences = []
+        self.sentences_et = []
         self.normalize = normalize
         if self.normalize:
             self.normalizer = StandardScaler()
@@ -77,8 +79,6 @@ class ZuCo(Corpus):
         super(ZuCo, self).__init__(normalize)
 
     def load_corpus(self):
-        self.sentences = []
-        self.sentences_et = []
         _feature_values = [[], [], [], [], []]
 
         sentences = np.load(self.directory, allow_pickle=True)
@@ -128,9 +128,6 @@ class GECO(Corpus):
             self.sentences, self.sentences_et = np.load(
                 '../data/GECO Corpus/pre-extracted.npy', allow_pickle=True)
             return
-
-        self.sentences = []
-        self.sentences_et = []
 
         _feature_values = [[], [], [], [], []]
         geco_df = pd.read_excel(self.directory)
@@ -210,9 +207,6 @@ class PROVO(Corpus):
         super(PROVO, self).__init__(normalize)
 
     def load_corpus(self):  # Flow of this extraction is similar to ZuCo.
-        self.sentences = []
-        self.sentences_et = []
-
         # csv has 230413 lines!
         provo_df = pd.read_csv(self.directory)
         self.vocabulary = provo_df['Word_Cleaned'].unique()  # 1192
@@ -256,22 +250,84 @@ class PROVO(Corpus):
             self.normalize_et()
 
 
+# TO-DO: Double check the scaling!
+# If on a very different scale, i have to do something before this
+# can be used with CorpusAggregator's normalization.
 class UCL(Corpus):
-    # txt
-    pass
+    def __init__(self, normalize):
+        self.name = 'UCL'
+        self.directory = '../data/UCL Corpus/eyetracking.'
+        super(UCL, self).__init__(normalize)
+
+    def load_corpus(self):
+        def _derive_nfix_and_trt(sent_nr, wp, num_subjects):
+            fixations = fix_df[(fix_df.sent_nr == sent_nr) &
+                               (fix_df.word_pos == wp)]
+            group_by_subject = fixations.groupby('subj_nr')
+            nfixations = [len(nfix)
+                          for nfix in group_by_subject.groups.values()]
+            trts = group_by_subject.apply(
+                lambda x: x['fix_duration'].sum()).values
+
+            # sometimes, a word is not fixated by all subjects,
+            # so the data obtained in this function is incomplete.
+            # have to do padding...
+            pad_amount = num_subjects - len(group_by_subject)
+            nfixations = np.append(nfixations, np.zeros(pad_amount))
+            trts = np.append(trts, [np.nan for _ in range(pad_amount)])  # CHANGE THIS TO np.fillna (?) LATER!
+            return nfixations, trts
+
+        def _build_features(wp):
+            __df = _df[_df.word_pos == wp]
+            num_subjects = __df.subj_nr.unique().shape[0]
+            nfixations, trts = _derive_nfix_and_trt(sent_num, wp, num_subjects)
+            features = np.zeros((num_subjects, 5))
+
+            features[:, 0] = nfixations  # nFixations
+            features[:, 1] = __df['RTfirstfix'].astype(float)  # FFD
+            features[:, 2] = trts  # TRT
+            features[:, 3] = __df['RTfirstpass'].astype(float)  # GD
+            features[:, 4] = __df['RTgopast'].astype(float)  # GPT
+            return features
+
+        ucl_df = pd.read_csv(self.directory + 'RT.txt', delimiter='\t')
+        fix_df = pd.read_csv(self.directory + 'fix.txt', delimiter='\t')
+
+        for sent_num in ucl_df.sent_nr.unique():
+            _df = ucl_df[ucl_df['sent_nr'] == sent_num]
+            word_pos = _df.word_pos.unique()
+            num_words = word_pos.shape[0]
+            self.sentences.append([self.clean_str(w)
+                                   for w in _df['word'].values[:num_words]])
+
+            # transform this to list compr later
+            sentence_et = np.array([_build_features(wp)
+                                    for wp in word_pos])
+            # if _df['word'].unique().shape[0] != sentence_et.shape[0]:
+            #     import pdb; pdb.set_trace()
+
+            if self.normalize:
+                self.normalizer.partial_fit(sentence_et.reshape(-1, 5))
+
+            self.sentences_et.append(np.nanmean(sentence_et, axis=1))
+
+        if self.normalize:
+            # self.print_stats(np.array(_feature_values))
+            self.normalize_et()
 
 
 corpus_classes = {
     'ZuCo': ZuCo,
     'PROVO': PROVO,
-    'GECO': GECO
+    'GECO': GECO,
+    'UCL': UCL
 }
 
 
 class CorpusAggregator(Dataset):
     def __init__(self, corpus_list, normalize=False):
         print('Corpuses to use:', corpus_list, 'Loading...')
-
+        corpus_list = ['UCL']
         normalize_aggregate = (normalize is not False)
 
         self.corpuses = {}
@@ -354,6 +410,7 @@ class _SplitDataset(Dataset):
         return len(self.indexed_sentences)
 
     def __getitem__(self, i):
+        # import pdb; pdb.set_trace()
         missing_dims = self.max_seq_len - len(self.indexed_sentences[i])
         sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
                          (0, missing_dims))
@@ -361,6 +418,7 @@ class _SplitDataset(Dataset):
                           (0, 0, 0, missing_dims))
         et_target_original = F.pad(torch.Tensor(self.targets_original[i]),
                                    (0, 0, 0, missing_dims))
+
         return sentence, et_target, et_target_original
 
 
