@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import KFold
 
-from settings import BATCH_SIZE
+from settings import BATCH_SIZE, LOAD_GECO_FROM_FILE
 
 
 class Corpus(Dataset):
@@ -101,8 +101,6 @@ class ZuCo(Corpus):
             self.normalize_et()
 
 
-# TO-DO: Adjust sentence extraction. I should be getting
-# around 5k separate sentences! Right now I'm getting around 3.3k
 class GECO(Corpus):
     """
     Task material: the novel 'The Mysterious Affair at Styles' by Agatha
@@ -125,6 +123,12 @@ class GECO(Corpus):
         super(GECO, self).__init__(normalize)
 
     def load_corpus(self):
+        if LOAD_GECO_FROM_FILE:
+            print('GECO is loaded from file.')
+            self.sentences, self.sentences_et = np.load(
+                '../data/GECO Corpus/pre-extracted.npy', allow_pickle=True)
+            return
+
         self.sentences = []
         self.sentences_et = []
 
@@ -164,7 +168,8 @@ class GECO(Corpus):
                     # consider this a complete sentence and append
                     # to the final list.
                     if (word.endswith('.') and
-                            word.lower()[-4:] not in ['mrs.', ' mr.']):
+                            word.upper().lower()[-4:] not in [
+                                'mrs.', ' mr.', ' dr.']):
                         self.sentences.append([self.clean_str(w)
                                                for w in sentence_words])
                         self.sentences_et.append(np.array(sentence_et))
@@ -279,6 +284,14 @@ class CorpusAggregator(Dataset):
             self.sentences.extend(corpus_.sentences)
             self.et_targets.extend(corpus_.sentences_et)
             self.corpuses[corpus] = corpus_
+
+        # zuco_2 = ZuCo(not normalize_aggregate, 'normal')
+        # self.sentences.extend(zuco_2.sentences)
+        # self.et_targets.extend(zuco_2.sentences_et)
+
+        # zuco_3 = ZuCo(not normalize_aggregate, 'task')
+        # self.sentences.extend(zuco_3.sentences)
+        # self.et_targets.extend(zuco_3.sentences_et)
 
         self.max_seq_len = max([len(s) for s in self.sentences])
         vocab = set(np.hstack(self.sentences))

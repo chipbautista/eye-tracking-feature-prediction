@@ -14,7 +14,7 @@ def _flatten(x):
 
 MAT_DIR = '../ZuCo/task{}/Matlab files/results{}.mat'
 SUBJECTS = ['ZAB', 'ZDM', 'ZGW', 'ZJM', 'ZJN', 'ZJS', 'ZKB', 'ZKH',
-            'ZKW', 'ZMG', 'ZPH']
+            'ZKW', 'ZMG', 'ZPH', 'ZDN']
 WORD_FEATURES = ['nFixations', 'meanPupilSize', 'FFD',
                  'FFD_pupilsize', 'TRT', 'TRT_pupilsize', 'GD', 'GD_pupilsize',
                  'GPT', 'GPT_pupilsize']
@@ -37,13 +37,19 @@ for subj_num, subj in enumerate(SUBJECTS):
     print('Extracting from subject', subj)
     mat_file = scio.loadmat(MAT_DIR.format(task_num, subj + task_code))
     for s_num, sentence_data in enumerate(mat_file['sentenceData'][0]):
-        words = [w[0] for w in sentence_data['word']['content'][0]]
+        try:
+            words = [w[0] for w in sentence_data['word']['content'][0]]
+        except IndexError:
+            print('Error on content for subject', subj, 'for sentence', s_num)
+            continue
+
         if 'words' in sentences[s_num]:
             # check if they're really the same sentence
             if words != sentences[s_num]['words']:
                 print('Sentence', s_num, 'content mismatch!')
                 print(words)
                 print(sentences[s_num]['words'])
+                continue
         else:
             # for the first subject loaded.
             sentences[s_num]['words'] = words

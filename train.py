@@ -38,10 +38,10 @@ def iterate(dataloader, train=True):
         loss = torch.sqrt(mse_loss(et_preds, et_targets))
 
         # calculate the loss PER FEATURE
-        loss_ = torch.sqrt(torch.Tensor(
-            [mse_loss(et_preds_inverse[:, :, i],
+        loss_ = torch.Tensor(
+            [mae_loss(et_preds_inverse[:, :, i],
                       et_targets_orig[:, :, i]).item()
-             for i in range(5)]))
+             for i in range(5)])
 
         if train:
             optimizer.zero_grad()
@@ -76,7 +76,7 @@ dataset = CorpusAggregator(corpus_list, args.normalize_aggregate)
 initial_word_embedding = init_word_embedding_from_word2vec(
     dataset.vocabulary.keys())
 mse_loss = torch.nn.MSELoss()
-# mse_loss = torch.nn.L1Loss()
+mae_loss = torch.nn.L1Loss()
 
 print('--- PARAMETERS ---')
 print('Learning Rate:', INITIAL_LR)
