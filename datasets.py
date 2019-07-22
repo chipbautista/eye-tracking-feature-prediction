@@ -6,9 +6,9 @@ import pandas as pd
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, StratifiedKFold
 
-from settings import BATCH_SIZE, LOAD_GECO_FROM_FILE
+from settings import BATCH_SIZE
 
 
 class Corpus(Dataset):
@@ -113,6 +113,7 @@ class GECO(Corpus):
     def __init__(self, normalize=True):
         self.name = 'GECO'
         self.directory = '../data/GECO Corpus/MonolingualReadingData.xlsx'
+        self.pre_extracted = '../data/GECO Corpus/pre-extracted.npy'
         self.et_features = {
             'nFixations': 'WORD_FIXATION_COUNT',
             'FFD': 'WORD_FIRST_FIXATION_DURATION',
@@ -123,11 +124,13 @@ class GECO(Corpus):
         super(GECO, self).__init__(normalize)
 
     def load_corpus(self):
-        if LOAD_GECO_FROM_FILE:
-            print('GECO is loaded from file.')
+        try:
             self.sentences, self.sentences_et = np.load(
-                '../data/GECO Corpus/pre-extracted.npy', allow_pickle=True)
-            return
+                self.pre_extracted, allow_pickle=True)
+            print('GECO is loaded from file.')
+        except FileNotFoundError:
+            print('Pre-extracted GECO is not found in', self.pre_extracted,
+                  'Extracting it now...')
 
         _feature_values = [[], [], [], [], []]
         geco_df = pd.read_excel(self.directory)
@@ -324,10 +327,39 @@ corpus_classes = {
 }
 
 
-class CorpusAggregator(Dataset):
+class _CrossValidator:
+    def split_cross_val(self, num_folds=10, stratified=True):
+        k_fold = StratifiedKFold if stratified else KFold
+        k_fold = k_fold(num_folds, shuffle=True, random_state=111)
+        splitter = k_fold.split(np.zeros(len(self.sentences)),
+                                self.labels if stratified else None)
+        for train_indices, test_indices in splitter:
+            yield (self._get_dataloader(train_indices),
+                   self._get_dataloader(test_indices, False))
+
+    def _get_dataloader(self, indices, train=True):
+        batch_size = BATCH_SIZE if train else len(indices)
+        indices = np.array(indices)
+        # _get_dataset should be implemented by child classes
+        dataset = self._get_dataset(indices)
+        return torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=True)
+
+    def build_vocabulary(self):
+        self.max_seq_len = max([len(s) for s in self.sentences])
+        print('Max sentence length:', self.max_seq_len)
+        vocab = set(np.hstack(self.sentences))
+        self.vocabulary = dict(zip(vocab, range(1, len(vocab) + 1)))
+        self.vocabulary.update({'': 0})
+        print('Num of words in vocabulary:', len(self.vocabulary))
+
+    def __len__(self):
+        return len(self.sentences)
+
+
+class CorpusAggregator(_CrossValidator):
     def __init__(self, corpus_list, normalize=False):
         print('Corpuses to use:', corpus_list, 'Loading...')
-        corpus_list = ['UCL']
         normalize_aggregate = (normalize is not False)
 
         self.corpuses = {}
@@ -349,11 +381,7 @@ class CorpusAggregator(Dataset):
         # self.sentences.extend(zuco_3.sentences)
         # self.et_targets.extend(zuco_3.sentences_et)
 
-        self.max_seq_len = max([len(s) for s in self.sentences])
-        vocab = set(np.hstack(self.sentences))
-        self.vocabulary = dict(zip(vocab, range(1, len(vocab) + 1)))
-        self.vocabulary.update({'': 0})
-        print('Num of words in vocabulary:', len(self.vocabulary))
+        self.build_vocabulary()
 
         if normalize_aggregate:
             self.normalizer = StandardScaler()
@@ -371,36 +399,21 @@ class CorpusAggregator(Dataset):
                                for s in self.et_targets]
             print_normalizer_stats(self, self.normalizer)
 
-        self.indexed_sentences = np.array([
-            [self.vocabulary[w] for w in sentence]
-            for sentence in self.sentences])
+        self.indexed_sentences = index_sentences(
+            self.sentences, self.vocabulary)
         self.et_targets = np.array(self.et_targets)
 
-    def split_cross_val(self, num_folds=10):
-        cv = KFold(num_folds, shuffle=True, random_state=111)
-        splitter = cv.split(np.zeros(len(self.sentences)))
-        for train_indices, test_indices in splitter:
-            yield (self._get_dataloader(train_indices),
-                   self._get_dataloader(test_indices, False))
-
-    def _get_dataloader(self, indices, train=True):
-        batch_size = BATCH_SIZE if train else len(indices)
-        indices = np.array(indices)
-        dataset = _SplitDataset(self.max_seq_len,
-                                self.indexed_sentences[indices],
-                                self.et_targets[indices],
-                                self.et_targets_original[indices])
-        return torch.utils.data.DataLoader(
-            dataset, batch_size=batch_size, shuffle=True)
-
-    def __len__(self):
-        return len(self.sentences)
+    def _get_dataset(self, indices):
+        return _SplitDataset(self.max_seq_len,
+                             self.indexed_sentences[indices],
+                             self.et_targets[indices],
+                             self.et_targets_original[indices])
 
 
 class _SplitDataset(Dataset):
     """Send the train/test indices here and use as input to DataLoader."""
     def __init__(self, max_seq_len, indexed_sentences,
-                 targets, targets_original):
+                 targets, targets_original=None):
         self.max_seq_len = max_seq_len
         self.indexed_sentences = indexed_sentences
         self.targets = targets
@@ -410,16 +423,20 @@ class _SplitDataset(Dataset):
         return len(self.indexed_sentences)
 
     def __getitem__(self, i):
-        # import pdb; pdb.set_trace()
         missing_dims = self.max_seq_len - len(self.indexed_sentences[i])
         sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
                          (0, missing_dims))
-        et_target = F.pad(torch.Tensor(self.targets[i]),
-                          (0, 0, 0, missing_dims))
-        et_target_original = F.pad(torch.Tensor(self.targets_original[i]),
-                                   (0, 0, 0, missing_dims))
+        if self.targets_original:
+            # used when predicting ET features
+            et_target = F.pad(torch.Tensor(self.targets[i]),
+                              (0, 0, 0, missing_dims))
+            et_target_original = F.pad(torch.Tensor(self.targets_original[i]),
+                                       (0, 0, 0, missing_dims))
 
-        return sentence, et_target, et_target_original
+            return sentence, et_target, et_target_original
+        else:
+            # used for NLP tasks
+            return sentence, self.targets[i]
 
 
 def print_normalizer_stats(caller, normalizer):
@@ -434,3 +451,8 @@ def print_normalizer_stats(caller, normalizer):
     else:
         print('var:', normalizer.var_)
         print('mean:', normalizer.mean_)
+
+
+def index_sentences(sentences, vocabulary):
+    return np.array([[vocabulary[w] for w in sentence]
+                     for sentence in sentences])

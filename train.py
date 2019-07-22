@@ -8,6 +8,9 @@ from datasets import CorpusAggregator
 from model import EyeTrackingPredictor, init_word_embedding_from_word2vec
 from settings import *
 
+# TO-DO: Convert words that occur <5 times to <UNK>!
+# Can use collections.Counter
+
 
 def iterate(dataloader, train=True):
     epoch_loss = 0.0
@@ -57,12 +60,13 @@ parser = ArgumentParser()
 parser.add_argument('--zuco', default=False)
 parser.add_argument('--provo', default=False)
 parser.add_argument('--geco', default=False)
+parser.add_argument('--ucl', default=False)
 parser.add_argument('--normalize-aggregate', default=True)
 parser.add_argument('--calculate-inverse-loss', default=True)
 args = parser.parse_args()
 
 if args.zuco is False and args.provo is False and args.geco is False:
-    corpus_list = ['ZuCo', 'PROVO', 'GECO']  # add UCL later?
+    corpus_list = ['ZuCo', 'PROVO', 'GECO', 'UCL']  # add UCL later?
 else:
     corpus_list = []
     if args.zuco is not False:
@@ -71,6 +75,8 @@ else:
         corpus_list.append('PROVO')
     if args.geco is not False:
         corpus_list.append('GECO')
+    if args.ucl is not False:
+        corpus_list.append('UCL')
 
 dataset = CorpusAggregator(corpus_list, args.normalize_aggregate)
 initial_word_embedding = init_word_embedding_from_word2vec(
@@ -87,17 +93,17 @@ print('\n--- Starting training (10-CV) ---')
 
 te_losses = []
 te_losses_ = []
-for k, (train_loader, test_loader) in enumerate(dataset.split_cross_val()):
+for k, (train_loader, test_loader) in enumerate(
+        dataset.split_cross_val(stratified=False)):
+    _start_time = time.time()
+
     if k == 0:
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    _start_time = time.time()
     model = EyeTrackingPredictor(initial_word_embedding.clone(),
-                                 dataset.max_seq_len)
+                                 dataset.max_seq_len, len(ET_FEATURES))
     optimizer = torch.optim.Adam(model.parameters(), lr=INITIAL_LR)
-    if USE_CUDA:
-        model = model.cuda()
 
     e_tr_losses = []
     e_tr_losses_ = []

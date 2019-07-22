@@ -14,6 +14,3 @@ WORD_EMBED_DIM = 300
 
 # Directories
 WORD_EMBED_MODEL_DIR = 'models/GoogleNews-vectors-negative300.bin'
-
-# ...
-LOAD_GECO_FROM_FILE = True
