@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, StratifiedKFold
 
 from settings import BATCH_SIZE
@@ -15,9 +15,11 @@ class Corpus(Dataset):
     def __init__(self, normalize):
         self.sentences = []
         self.sentences_et = []
+        self.sentences_et_original = []
         self.normalize = normalize
         if self.normalize:
             self.normalizer = StandardScaler()
+        print('Initializing', self.name)
         self.load_corpus()
 
     def clean_str(self, string):
@@ -51,6 +53,9 @@ class Corpus(Dataset):
         return string
 
     def normalize_et(self):
+        # keep a copy for later evaluation
+        self.sentences_et_original = [np.nan_to_num(s)
+                                      for s in np.copy(self.sentences_et)]
         # We keep the NaN values at first so that it doesn't mess up
         # the normalization process.
         # Let's only convert them to 0s after normalizing.
@@ -60,16 +65,19 @@ class Corpus(Dataset):
     def print_stats(self, arr):
         print('\n' + self.name, 'ET minimum values:', np.nanmin(arr, 1))
         print(self.name, 'ET maximum values:', np.nanmax(arr, 1))
-        print_normalizer_stats(self, self.normalizer)
+        print_normalizer_stats(self.name, self.normalizer)
+
+    def __len__(self):
+        return len(self.sentences)
 
 
 class ZuCo(Corpus):
     def __init__(self, normalize=True, task='sentiment'):
-        self.name = 'ZuCo'
+        self.name = '-'.join(['ZuCo', task])
 
-        if task == 'sentiment':
+        if task in ['sentiment', '1']:
             task_code = '_SR'
-        elif task == 'normal':
+        elif task in ['normal', '2']:
             task_code = '_NR'
         else:
             task_code = '_TSR'
@@ -91,6 +99,8 @@ class ZuCo(Corpus):
             for i in range(5):
                 _feature_values[i].extend(features.reshape(5, -1)[i])
 
+            # warning: this nanmean will produce RuntimeWarnings
+            # because some words are not fixated on at all ( i think )
             features = np.nanmean(features.T, axis=1)
             if self.normalize:
                 self.normalizer.partial_fit(features)
@@ -113,7 +123,7 @@ class GECO(Corpus):
     def __init__(self, normalize=True):
         self.name = 'GECO'
         self.directory = '../data/GECO Corpus/MonolingualReadingData.xlsx'
-        self.pre_extracted = '../data/GECO Corpus/pre-extracted.npy'
+        self.pre_extracted = '../data/GECO Corpus/pre-extracted{}.npy'
         self.et_features = {
             'nFixations': 'WORD_FIXATION_COUNT',
             'FFD': 'WORD_FIRST_FIXATION_DURATION',
@@ -124,12 +134,16 @@ class GECO(Corpus):
         super(GECO, self).__init__(normalize)
 
     def load_corpus(self):
+        pre_extracted_dir = self.pre_extracted.format(
+            '-normalized' if self.normalize else '')
         try:
-            self.sentences, self.sentences_et = np.load(
-                self.pre_extracted, allow_pickle=True)
-            print('GECO is loaded from file.')
+            (self.sentences, self.sentences_et,
+                self.sentences_et_original, self.normalizer) = np.load(
+                pre_extracted_dir, allow_pickle=True)
+            print('\tGECO is loaded from file.\n')
+            return
         except FileNotFoundError:
-            print('Pre-extracted GECO is not found in', self.pre_extracted,
+            print('Pre-extracted GECO is not found in', pre_extracted_dir,
                   'Extracting it now...')
 
         _feature_values = [[], [], [], [], []]
@@ -156,13 +170,13 @@ class GECO(Corpus):
                     features[features == '.'] = np.NaN
                     features = features.astype(float)
 
-                    features_mean = np.nanmean(features, axis=0)
                     if np.nan_to_num(features).any():
                         for i in range(5):
                             _feature_values[i].extend(features.T[i])
                         if self.normalize:
-                            self.normalizer.partial_fit(features_mean)
+                            self.normalizer.partial_fit(features)
 
+                    features_mean = np.nanmean(features, axis=0)
                     sentence_et.append(features_mean)
 
                     # consider this a complete sentence and append
@@ -179,6 +193,15 @@ class GECO(Corpus):
         if self.normalize:
             self.print_stats(np.array(_feature_values))
             self.normalize_et()
+
+        _normalizer = self.normalizer if self.normalize else None
+        np.save(pre_extracted_dir,
+                (self.sentences, self.sentences_et,
+                 self.sentences_et_original, _normalizer),
+                allow_pickle=True)
+        print('GECO extracted sentences and sentences_et saved to:',
+              pre_extracted_dir,
+              'This will be automatically loaded at the next run.')
 
 
 class PROVO(Corpus):
@@ -233,18 +256,19 @@ class PROVO(Corpus):
                     features = ___df[self.et_features.values()].values
                     # PROVO gives 0 values to TRT/DWELL TIME,
                     # but we want those to be 0.
-                    features[:, 2][np.where(features[:, 2] == 0)[0]] = np.nan
+                    _nonzeros = np.where(features[:, 2] == 0)[0]
+                    features[:, 2][_nonzeros] = np.nan
 
                     for i in range(5):
                         _feature_values[i].extend(features.T[i])
 
-                    features = np.nanmean(features, axis=0)
                     if self.normalize:
                         self.normalizer.partial_fit(features)
 
                     # i think this next line triggers the
                     # TO-DO: add code that doesn't do this if the values
                     # are none. To save on RuntimeWarning outputs...?
+                    features = np.nanmean(features, axis=0)
                     sentence_et.append(features)
                 self.sentences_et.append(np.array(sentence_et))
 
@@ -319,18 +343,13 @@ class UCL(Corpus):
             self.normalize_et()
 
 
-corpus_classes = {
-    'ZuCo': ZuCo,
-    'PROVO': PROVO,
-    'GECO': GECO,
-    'UCL': UCL
-}
+corpus_classes = {'PROVO': PROVO, 'GECO': GECO, 'UCL': UCL}
 
 
 class _CrossValidator:
     def split_cross_val(self, num_folds=10, stratified=True):
         k_fold = StratifiedKFold if stratified else KFold
-        k_fold = k_fold(num_folds, shuffle=True, random_state=111)
+        k_fold = k_fold(num_folds, shuffle=True, random_state=321)
         splitter = k_fold.split(np.zeros(len(self.sentences)),
                                 self.labels if stratified else None)
         for train_indices, test_indices in splitter:
@@ -338,7 +357,7 @@ class _CrossValidator:
                    self._get_dataloader(test_indices, False))
 
     def _get_dataloader(self, indices, train=True):
-        batch_size = BATCH_SIZE if train else len(indices)
+        batch_size = self.batch_size if train else len(indices)
         indices = np.array(indices)
         # _get_dataset should be implemented by child classes
         dataset = self._get_dataset(indices)
@@ -357,33 +376,40 @@ class _CrossValidator:
         return len(self.sentences)
 
 
+# TO-DO: Fix vocabulary! Convert non-frequent words to <UNK>
 class CorpusAggregator(_CrossValidator):
     def __init__(self, corpus_list, normalize=False):
-        print('Corpuses to use:', corpus_list, 'Loading...')
-        normalize_aggregate = (normalize is not False)
+        self.batch_size = BATCH_SIZE
+        self.normalize_aggregate = normalize
 
-        self.corpuses = {}
+        self.normalizers = {}
+        self._index_corpus = []  # to keep track of the data point's corpus
         self.sentences = []
         self.et_targets = []
+        self.et_targets_original = []
 
         # instantiate the classes
+        print('Loading corpuses...')
         for corpus in corpus_list:
-            corpus_ = corpus_classes[corpus](not normalize_aggregate)
+            if 'ZuCo' in corpus:
+                corpus_ = ZuCo(not self.normalize_aggregate,
+                               task=corpus.split('-')[-1])
+            else:
+                corpus_ = corpus_classes[corpus](not self.normalize_aggregate)
+
             self.sentences.extend(corpus_.sentences)
             self.et_targets.extend(corpus_.sentences_et)
-            self.corpuses[corpus] = corpus_
+            self.et_targets_original.extend(corpus_.sentences_et_original)
+            self._index_corpus.extend([corpus] * len(corpus_))
 
-        # zuco_2 = ZuCo(not normalize_aggregate, 'normal')
-        # self.sentences.extend(zuco_2.sentences)
-        # self.et_targets.extend(zuco_2.sentences_et)
-
-        # zuco_3 = ZuCo(not normalize_aggregate, 'task')
-        # self.sentences.extend(zuco_3.sentences)
-        # self.et_targets.extend(zuco_3.sentences_et)
+            if not self.normalize_aggregate:
+                # if not aggregately normalizing, store the corpus'
+                # respective normalizers instead
+                self.normalizers[corpus] = corpus_.normalizer
 
         self.build_vocabulary()
 
-        if normalize_aggregate:
+        if self.normalize_aggregate:
             self.normalizer = StandardScaler()
 
             # ugly way to "flatten" the values into shape (N, 5) though :(
@@ -393,31 +419,45 @@ class CorpusAggregator(_CrossValidator):
             self.normalizer.fit(np.array(feature_values))
 
             # a bit inefficient to do this but oh well...
-            self.et_targets = [np.nan_to_num(s) for s in self.et_targets]
-            self.et_targets_original = np.copy(self.et_targets)
-            self.et_targets = [self.normalizer.transform(s)
-                               for s in self.et_targets]
+            # for storing original ET features, already convert NaNs to 0
+            self.et_targets_original = np.array(
+                [np.nan_to_num(s) for s in np.copy(self.et_targets)])
+            # for the normalized targets, normalize before converting NaNs to 0
+            self.et_targets = np.array(
+                [np.nan_to_num(self.normalizer.transform(s))
+                 for s in self.et_targets])
             print_normalizer_stats(self, self.normalizer)
 
         self.indexed_sentences = index_sentences(
             self.sentences, self.vocabulary)
         self.et_targets = np.array(self.et_targets)
+        self.et_targets_original = np.array(self.et_targets_original)
 
     def _get_dataset(self, indices):
         return _SplitDataset(self.max_seq_len,
                              self.indexed_sentences[indices],
                              self.et_targets[indices],
-                             self.et_targets_original[indices])
+                             self.et_targets_original[indices],
+                             indices=indices)
+
+    def inverse_transform(self, data_index, value):
+        if self.normalize_aggregate:
+            return self.normalizer.inverse_transform(value)
+
+        corpus = self._index_corpus[data_index]
+        return self.normalizers[corpus].inverse_transform(value)
 
 
 class _SplitDataset(Dataset):
     """Send the train/test indices here and use as input to DataLoader."""
-    def __init__(self, max_seq_len, indexed_sentences,
-                 targets, targets_original=None):
+    def __init__(self, max_seq_len, indexed_sentences, targets,
+                 targets_original=None, et_features=None, indices=None):
         self.max_seq_len = max_seq_len
         self.indexed_sentences = indexed_sentences
         self.targets = targets
         self.targets_original = targets_original
+        self.et_features = et_features
+        self.aggregate_indices = indices
 
     def __len__(self):
         return len(self.indexed_sentences)
@@ -426,22 +466,27 @@ class _SplitDataset(Dataset):
         missing_dims = self.max_seq_len - len(self.indexed_sentences[i])
         sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
                          (0, missing_dims))
-        if self.targets_original:
+        if self.targets_original is not None:
             # used when predicting ET features
             et_target = F.pad(torch.Tensor(self.targets[i]),
                               (0, 0, 0, missing_dims))
             et_target_original = F.pad(torch.Tensor(self.targets_original[i]),
                                        (0, 0, 0, missing_dims))
-
-            return sentence, et_target, et_target_original
+            return (sentence, et_target, et_target_original,
+                    self.aggregate_indices[i])
+        elif self.et_features is not None:
+            # used for NLP tasks with gaze data
+            et_feature = F.pad(torch.Tensor(self.et_features[i]),
+                               (0, 0, 0, missing_dims))
+            return sentence, et_feature, self.targets[i]
         else:
-            # used for NLP tasks
+            # used for NLP tasks without gaze data
             return sentence, self.targets[i]
 
 
 def print_normalizer_stats(caller, normalizer):
     print('\n--- {} {} Normalizer Stats ---'.format(
-        caller.__class__.__name__, normalizer.__class__.__name__))
+        caller, normalizer.__class__.__name__))
     if normalizer.__class__.__name__ == 'MinMaxScaler':
         print('min_:', normalizer.min_)
         print('scale_:', normalizer.scale_)

@@ -5,8 +5,8 @@ from gensim.models import KeyedVectors
 
 from settings import *
 
-torch.manual_seed(123)
-np.random.seed(123)
+torch.manual_seed(111)
+np.random.seed(111)
 
 
 class EyeTrackingPredictor(torch.nn.Module):
@@ -17,15 +17,18 @@ class EyeTrackingPredictor(torch.nn.Module):
 
         self.word_embedding = torch.nn.Embedding.from_pretrained(
             initial_word_embedding, freeze=False)
+
+        # self.lstm = torch.nn.LSTM(
+        #     input_size=WORD_EMBED_DIM, hidden_size=LSTM_HIDDEN_UNITS,
+        #     num_layers=1, batch_first=True, bidirectional=True
+        # )
         self.lstm = torch.nn.LSTM(
             input_size=WORD_EMBED_DIM, hidden_size=LSTM_HIDDEN_UNITS,
-            num_layers=1, batch_first=True, bidirectional=True
-        )
+            num_layers=3, dropout=0.5, batch_first=True, bidirectional=True)
         self.dropout = torch.nn.Dropout(p=DROPOUT_PROB)
         self.out = torch.nn.Linear(
             in_features=LSTM_HIDDEN_UNITS * 2,
-            out_features=self.out_features
-        )
+            out_features=self.out_features)
 
     def forward(self, x):
         word_embeddings = self.word_embedding(x)
@@ -48,9 +51,16 @@ class NLPTaskClassifier(torch.nn.Module):
             et_feature_dim = 0
         self.max_sentence_length = max_seq_len
 
-        # self.out_features = num_classes
-        self.word_embedding = torch.nn.Embedding.from_pretrained(
-            initial_word_embedding, freeze=False)
+        # self.word_embedding = torch.nn.Embedding.from_pretrained(
+        #     initial_word_embedding, freeze=False)
+        if isinstance(initial_word_embedding, torch.nn.Embedding):
+            # if using an ET predictor model, then just use that
+            # as the pre-trained embedding
+            self.word_embedding = initial_word_embedding
+        else:
+            self.word_embedding = torch.nn.Embedding.from_pretrained(
+                initial_word_embedding, freeze=False)
+
         self.lstm = torch.nn.LSTM(input_size=WORD_EMBED_DIM + et_feature_dim,
                                   hidden_size=LSTM_HIDDEN_UNITS, num_layers=1,
                                   batch_first=True, bidirectional=True)
@@ -94,13 +104,13 @@ def init_word_embedding_from_word2vec(vocabulary):
         WORD_EMBED_MODEL_DIR, binary=True)
     print('Done. Will now extract embeddings for needed words.')
 
-    embeddings = [np.random.uniform(-1.0, 1.0, WORD_EMBED_DIM)]  # index 0 is just padding
+    embeddings = [np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM)]  # index 0 is just padding
     oov_words = []
     for word in vocabulary:
         try:
             embeddings.append(pretrained_w2v[word])
         except KeyError:
-            embeddings.append(np.random.uniform(-1.0, 1.0, WORD_EMBED_DIM))
+            embeddings.append(np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM))
             oov_words.append(word)
 
     print(len(oov_words), 'words were not found in the pre-trained model.\n')
