@@ -1,12 +1,9 @@
 
-import numpy as np
 import torch
-from gensim.models import KeyedVectors
 
 from settings import *
 
 torch.manual_seed(111)
-np.random.seed(111)
 
 
 class EyeTrackingPredictor(torch.nn.Module):
@@ -17,14 +14,9 @@ class EyeTrackingPredictor(torch.nn.Module):
 
         self.word_embedding = torch.nn.Embedding.from_pretrained(
             initial_word_embedding, freeze=False)
-
-        # self.lstm = torch.nn.LSTM(
-        #     input_size=WORD_EMBED_DIM, hidden_size=LSTM_HIDDEN_UNITS,
-        #     num_layers=1, batch_first=True, bidirectional=True
-        # )
         self.lstm = torch.nn.LSTM(
             input_size=WORD_EMBED_DIM, hidden_size=LSTM_HIDDEN_UNITS,
-            num_layers=3, dropout=0.5, batch_first=True, bidirectional=True)
+            num_layers=2, dropout=0.5, batch_first=True, bidirectional=True)
         self.dropout = torch.nn.Dropout(p=DROPOUT_PROB)
         self.out = torch.nn.Linear(
             in_features=LSTM_HIDDEN_UNITS * 2,
@@ -96,22 +88,3 @@ class NLPTaskClassifier(torch.nn.Module):
         hidden_l1_out = self.hidden_l1(lstm_embedding)
         logits = self.out(hidden_l1_out)
         return logits
-
-
-def init_word_embedding_from_word2vec(vocabulary):
-    print('\nLoading pre-trained word2vec from', WORD_EMBED_MODEL_DIR)
-    pretrained_w2v = KeyedVectors.load_word2vec_format(
-        WORD_EMBED_MODEL_DIR, binary=True)
-    print('Done. Will now extract embeddings for needed words.')
-
-    embeddings = [np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM)]  # index 0 is just padding
-    oov_words = []
-    for word in vocabulary:
-        try:
-            embeddings.append(pretrained_w2v[word])
-        except KeyError:
-            embeddings.append(np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM))
-            oov_words.append(word)
-
-    print(len(oov_words), 'words were not found in the pre-trained model.\n')
-    return torch.Tensor(embeddings)

@@ -5,11 +5,8 @@ import torch
 import numpy as np
 
 from datasets import CorpusAggregator
-from model import EyeTrackingPredictor, init_word_embedding_from_word2vec
+from model import EyeTrackingPredictor
 from settings import *
-
-# TO-DO: Convert words that occur <5 times to <UNK>!
-# Can use collections.Counter
 
 
 def iterate(dataloader):
@@ -69,13 +66,15 @@ parser.add_argument('--provo', default=False)
 parser.add_argument('--geco', default=False)
 parser.add_argument('--ucl', default=False)
 parser.add_argument('--normalize-aggregate', default='False')
+parser.add_argument('--filter-vocab', default='False')
 parser.add_argument('--save-model', default=False)
+parser.add_argument('--num-epochs', default=str(NUM_EPOCHS))
+parser.add_argument('--lr', default=str(INITIAL_LR))
 args = parser.parse_args()
 
 print(args)
 if (args.zuco_1 is False and args.zuco_2 is False and args.zuco_3 is False and
         args.provo is False and args.geco is False and args.ucl is False):
-    # add UCL later?
     corpus_list = ['ZuCo-1', 'ZuCo-2', 'ZuCo-3', 'PROVO', 'GECO', 'UCL']
 else:
     corpus_list = []
@@ -92,15 +91,14 @@ else:
     if args.ucl is not False:
         corpus_list.append('UCL')
 
-dataset = CorpusAggregator(corpus_list, eval(args.normalize_aggregate))
-initial_word_embedding = init_word_embedding_from_word2vec(
-    dataset.vocabulary.keys())
+dataset = CorpusAggregator(corpus_list, eval(args.normalize_aggregate),
+                           filter_vocab=eval(args.filter_vocab))
 mse_loss = torch.nn.MSELoss(reduction='sum')
 mae_loss = torch.nn.L1Loss(reduction='sum')
 
 print('--- PARAMETERS ---')
-print('Learning Rate:', INITIAL_LR)
-print('# Epochs:', NUM_EPOCHS)
+print('Learning Rate:', eval(args.lr))
+print('# Epochs:', eval(args.num_epochs))
 print('LSTM Hidden Units:', LSTM_HIDDEN_UNITS)
 print('Number of sentences:', len(dataset))
 print('\n--- Starting training (10-CV) ---')
@@ -115,23 +113,26 @@ for k, (train_loader, test_loader) in enumerate(
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    model = EyeTrackingPredictor(initial_word_embedding.clone(),
+    model = EyeTrackingPredictor(dataset.word_embeddings.clone(),
                                  dataset.max_seq_len, len(ET_FEATURES))
     if USE_CUDA:
         model = model.cuda()
-    optimizer = torch.optim.Adam(model.parameters(), lr=INITIAL_LR)
+    optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
+    optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=0.5, patience=2, verbose=False)
 
     best_epochs = []
     e_tr_losses = []
     e_tr_losses_ = []
     e_te_losses = []
     e_te_losses_ = []
-    for e in range(NUM_EPOCHS):
+    for e in range(eval(args.num_epochs)):
         model.train()
         train_loss, train_loss_ = iterate(train_loader)
 
         model.eval()
         test_loss, test_loss_ = iterate(test_loader)
+        optim_scheduler.step(test_loss)
 
         e_tr_losses.append(train_loss)
         e_tr_losses_.append(train_loss_)
@@ -152,8 +153,8 @@ for k, (train_loader, test_loader) in enumerate(
           '- Train rMSE: {:.5f}'.format(e_tr_losses[best_epoch]),
           'Test rMSE: {:.5f} '.format(e_te_losses[best_epoch]),
           '({:.2f}s)'.format(time.time() - _start_time))
-    print('Train MSE_:', e_tr_losses_[best_epoch])
-    print('Test MSE_:', e_te_losses_[best_epoch])
+    print('Train MAE:', e_tr_losses_[best_epoch])
+    print('Test MAE:', e_te_losses_[best_epoch])
 
 print('\nCV Mean Test Loss:', np.mean(te_losses))
 print(torch.stack(te_losses_).mean(0))

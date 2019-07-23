@@ -1,14 +1,19 @@
 import re
+from collections import Counter
 
 import torch
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.model_selection import KFold, StratifiedKFold
+from gensim.models import KeyedVectors
 
-from settings import BATCH_SIZE
+from settings import BATCH_SIZE, WORD_EMBED_DIM, WORD_EMBED_MODEL_DIR
+
+
+np.random.seed(111)
 
 
 class Corpus(Dataset):
@@ -18,28 +23,26 @@ class Corpus(Dataset):
         self.sentences_et_original = []
         self.normalize = normalize
         if self.normalize:
-            self.normalizer = StandardScaler()
+            self.normalizer = RobustScaler()
         print('Initializing', self.name)
         self.load_corpus()
 
     def clean_str(self, string):
         """
+        Note that this will always be used PER-WORD, not PER-SENTENCE.
         mostly copy pasted from Hollenstein's code...
 
         had to change some because it messes up the matching of the words
         in a sentence :fearful:
         (removes 'words' such as '...' that actually have ET features!)
         """
-        # string = string.replace(".", "")
-        string = re.sub(r'([\w ])(\.)+', r'\1', string.strip().lower())
+        string = re.sub(r'([a-zA-Z ])(\.)+', r'\1', string.strip())
         string = string.replace(",", "")
         string = string.replace("--", "")
+        string = string.replace("-", "")
         string = string.replace("''", "")
-        # string = string.replace("' ", "")
-        # string = string.replace(" '", " ")
         string = re.sub(r"'\s?$", '', string)
-        # string = string.replace("- ", " ")
-        string = re.sub(r'[?!/;*()\\`:&"]', '', string)
+        string = re.sub(r'[?!/;*()\\`:&"\[\]]', '', string)
 
         string = re.sub(r"\s{2,}", " ", string)
 
@@ -49,7 +52,6 @@ class Corpus(Dataset):
         # remove apostrophes that are not followed by an alphabet
         # may be unnecessary though
         # string = re.sub(r"'([^a-z])", r"\1", string)
-
         return string
 
     def normalize_et(self):
@@ -62,9 +64,10 @@ class Corpus(Dataset):
         self.sentences_et = [np.nan_to_num(self.normalizer.transform(s))
                              for s in self.sentences_et]
 
-    def print_stats(self, arr):
-        print('\n' + self.name, 'ET minimum values:', np.nanmin(arr, 1))
-        print(self.name, 'ET maximum values:', np.nanmax(arr, 1))
+    def print_stats(self, arr=None):
+        if arr is not None:
+            print('\n' + self.name, 'ET minimum values:', np.nanmin(arr, 1))
+            print(self.name, 'ET maximum values:', np.nanmax(arr, 1))
         print_normalizer_stats(self.name, self.normalizer)
 
     def __len__(self):
@@ -102,11 +105,10 @@ class ZuCo(Corpus):
             # warning: this nanmean will produce RuntimeWarnings
             # because some words are not fixated on at all ( i think )
             features = np.nanmean(features.T, axis=1)
-            if self.normalize:
-                self.normalizer.partial_fit(features)
             self.sentences_et.append(features)
 
         if self.normalize:
+            self.normalizer.fit(np.array(_feature_values).T)
             self.print_stats(np.array(_feature_values))
             self.normalize_et()
 
@@ -173,8 +175,6 @@ class GECO(Corpus):
                     if np.nan_to_num(features).any():
                         for i in range(5):
                             _feature_values[i].extend(features.T[i])
-                        if self.normalize:
-                            self.normalizer.partial_fit(features)
 
                     features_mean = np.nanmean(features, axis=0)
                     sentence_et.append(features_mean)
@@ -191,6 +191,7 @@ class GECO(Corpus):
                         sentence_et = []
 
         if self.normalize:
+            self.normalizer.fit(np.array(_feature_values).T)
             self.print_stats(np.array(_feature_values))
             self.normalize_et()
 
@@ -255,15 +256,12 @@ class PROVO(Corpus):
                     ___df = __df[__df['Word_Cleaned'] == clean_word]
                     features = ___df[self.et_features.values()].values
                     # PROVO gives 0 values to TRT/DWELL TIME,
-                    # but we want those to be 0.
+                    # but we want those to be NaN.
                     _nonzeros = np.where(features[:, 2] == 0)[0]
                     features[:, 2][_nonzeros] = np.nan
 
                     for i in range(5):
                         _feature_values[i].extend(features.T[i])
-
-                    if self.normalize:
-                        self.normalizer.partial_fit(features)
 
                     # i think this next line triggers the
                     # TO-DO: add code that doesn't do this if the values
@@ -273,13 +271,11 @@ class PROVO(Corpus):
                 self.sentences_et.append(np.array(sentence_et))
 
         if self.normalize:
+            self.normalizer.fit(np.array(_feature_values).T)
             self.print_stats(np.array(_feature_values))
             self.normalize_et()
 
 
-# TO-DO: Double check the scaling!
-# If on a very different scale, i have to do something before this
-# can be used with CorpusAggregator's normalization.
 class UCL(Corpus):
     def __init__(self, normalize):
         self.name = 'UCL'
@@ -301,7 +297,7 @@ class UCL(Corpus):
             # have to do padding...
             pad_amount = num_subjects - len(group_by_subject)
             nfixations = np.append(nfixations, np.zeros(pad_amount))
-            trts = np.append(trts, [np.nan for _ in range(pad_amount)])  # CHANGE THIS TO np.fillna (?) LATER!
+            trts = np.append(trts, [np.nan for _ in range(pad_amount)])
             return nfixations, trts
 
         def _build_features(wp):
@@ -317,6 +313,7 @@ class UCL(Corpus):
             features[:, 4] = __df['RTgopast'].astype(float)  # GPT
             return features
 
+        _feature_values = [[], [], [], [], []]
         ucl_df = pd.read_csv(self.directory + 'RT.txt', delimiter='\t')
         fix_df = pd.read_csv(self.directory + 'fix.txt', delimiter='\t')
 
@@ -327,19 +324,18 @@ class UCL(Corpus):
             self.sentences.append([self.clean_str(w)
                                    for w in _df['word'].values[:num_words]])
 
-            # transform this to list compr later
-            sentence_et = np.array([_build_features(wp)
-                                    for wp in word_pos])
-            # if _df['word'].unique().shape[0] != sentence_et.shape[0]:
-            #     import pdb; pdb.set_trace()
-
-            if self.normalize:
-                self.normalizer.partial_fit(sentence_et.reshape(-1, 5))
-
+            sentence_et = []
+            for wp in word_pos:
+                features = _build_features(wp)
+                sentence_et.append(features)
+                for i in range(5):
+                    _feature_values[i].extend(features[:, i])
+            sentence_et = np.array(sentence_et)
             self.sentences_et.append(np.nanmean(sentence_et, axis=1))
 
         if self.normalize:
-            # self.print_stats(np.array(_feature_values))
+            self.normalizer.fit(np.array(_feature_values).T)
+            self.print_stats(np.array(_feature_values))
             self.normalize_et()
 
 
@@ -365,22 +361,20 @@ class _CrossValidator:
             dataset, batch_size=batch_size, shuffle=True)
 
     def build_vocabulary(self):
-        self.max_seq_len = max([len(s) for s in self.sentences])
-        print('Max sentence length:', self.max_seq_len)
-        vocab = set(np.hstack(self.sentences))
-        self.vocabulary = dict(zip(vocab, range(1, len(vocab) + 1)))
-        self.vocabulary.update({'': 0})
+        vocab, self.word_embeddings = init_word_embedding_from_word2vec(
+            self.sentences, self.filter_vocab)
+        self.vocabulary = dict(zip(vocab, range(len(vocab))))
         print('Num of words in vocabulary:', len(self.vocabulary))
 
     def __len__(self):
         return len(self.sentences)
 
 
-# TO-DO: Fix vocabulary! Convert non-frequent words to <UNK>
 class CorpusAggregator(_CrossValidator):
-    def __init__(self, corpus_list, normalize=False):
+    def __init__(self, corpus_list, normalize=False, filter_vocab=True):
         self.batch_size = BATCH_SIZE
         self.normalize_aggregate = normalize
+        self.filter_vocab = filter_vocab
 
         self.normalizers = {}
         self._index_corpus = []  # to keep track of the data point's corpus
@@ -388,7 +382,18 @@ class CorpusAggregator(_CrossValidator):
         self.et_targets = []
         self.et_targets_original = []
 
-        # instantiate the classes
+        self.build_corpus(corpus_list)
+        self.build_vocabulary()
+
+        if self.normalize_aggregate:
+            self.normalize()
+
+        self.indexed_sentences = index_sentences(
+            self.sentences, self.vocabulary, self.filter_vocab)
+        self.et_targets = np.array(self.et_targets)
+        self.et_targets_original = np.array(self.et_targets_original)
+
+    def build_corpus(self, corpus_list):
         print('Loading corpuses...')
         for corpus in corpus_list:
             if 'ZuCo' in corpus:
@@ -401,37 +406,39 @@ class CorpusAggregator(_CrossValidator):
             self.et_targets.extend(corpus_.sentences_et)
             self.et_targets_original.extend(corpus_.sentences_et_original)
             self._index_corpus.extend([corpus] * len(corpus_))
-
             if not self.normalize_aggregate:
                 # if not aggregately normalizing, store the corpus'
                 # respective normalizers instead
                 self.normalizers[corpus] = corpus_.normalizer
 
-        self.build_vocabulary()
+            long_sentences = []
+            for sss in corpus_.sentences:
+                if len(sss) > 60:
+                    long_sentences.append(sss)
+            if len(long_sentences) > 1:
+                import pdb; pdb.set_trace()
 
-        if self.normalize_aggregate:
-            self.normalizer = StandardScaler()
+        self.max_seq_len = max([len(s) for s in self.sentences])
+        print('Max sentence length:', self.max_seq_len)
 
-            # ugly way to "flatten" the values into shape (N, 5) though :(
-            feature_values = []
-            for sent_et in self.et_targets:
-                feature_values.extend(sent_et)
-            self.normalizer.fit(np.array(feature_values))
+    def normalize(self):
+        self.normalizer = StandardScaler()
 
-            # a bit inefficient to do this but oh well...
-            # for storing original ET features, already convert NaNs to 0
-            self.et_targets_original = np.array(
-                [np.nan_to_num(s) for s in np.copy(self.et_targets)])
-            # for the normalized targets, normalize before converting NaNs to 0
-            self.et_targets = np.array(
-                [np.nan_to_num(self.normalizer.transform(s))
-                 for s in self.et_targets])
-            print_normalizer_stats(self, self.normalizer)
+        # ugly way to "flatten" the values into shape (N, 5) though :(
+        feature_values = []
+        for sent_et in self.et_targets:
+            feature_values.extend(sent_et)
+        self.normalizer.fit(np.array(feature_values))
 
-        self.indexed_sentences = index_sentences(
-            self.sentences, self.vocabulary)
-        self.et_targets = np.array(self.et_targets)
-        self.et_targets_original = np.array(self.et_targets_original)
+        # a bit inefficient to do this but oh well...
+        # for storing original ET features, already convert NaNs to 0
+        self.et_targets_original = np.array(
+            [np.nan_to_num(s) for s in np.copy(self.et_targets)])
+        # for the normalized targets, normalize before converting NaNs to 0
+        self.et_targets = np.array(
+            [np.nan_to_num(self.normalizer.transform(s))
+             for s in self.et_targets])
+        print_normalizer_stats(self, self.normalizer)
 
     def _get_dataset(self, indices):
         return _SplitDataset(self.max_seq_len,
@@ -493,11 +500,74 @@ def print_normalizer_stats(caller, normalizer):
         print('data_min_:', normalizer.data_min_)
         print('data_max_:', normalizer.data_max_)
         print('data_range_:', normalizer.data_range_)
+    elif normalizer.__class__.__name__ == 'RobustScaler':
+        print('center_:', normalizer.center_)
+        print('scale_:', normalizer.scale_)
     else:
         print('var:', normalizer.var_)
+        print('std:', np.sqrt(normalizer.var_))
         print('mean:', normalizer.mean_)
 
 
-def index_sentences(sentences, vocabulary):
-    return np.array([[vocabulary[w] for w in sentence]
+def index_sentences(sentences, vocabulary, filter):
+    def _get_index(w):
+        w = w if w in vocabulary else _fix_oov_word(vocabulary, w, filter=filter)
+        return vocabulary[w]
+
+    return np.array([[_get_index(w) for w in sentence]
                      for sentence in sentences])
+
+
+def init_word_embedding_from_word2vec(sentences, filter_vocab=True):
+    print('\nLoading pre-trained word2vec from', WORD_EMBED_MODEL_DIR)
+    pretrained_w2v = KeyedVectors.load_word2vec_format(
+        WORD_EMBED_MODEL_DIR, binary=True)
+    print('\nDone. Will now extract embeddings for needed words.',
+          'Include ALL words = {}. (filter_vocab is set to {})'.format(
+              not filter_vocab, filter_vocab))
+
+    counter = Counter(np.hstack(sentences))
+    embeddings = {
+        '<UNK>': np.random.uniform(-0.5, 0.5, WORD_EMBED_DIM),
+        '<NUM>': np.random.uniform(-0.5, 0.5, WORD_EMBED_DIM),
+        '<ENTITY>': np.random.uniform(-0.5, 0.5, WORD_EMBED_DIM)
+    } if filter_vocab else {}
+
+    oov_words = []
+    for word, count in counter.items():
+        if word in pretrained_w2v:
+            embeddings[word] = pretrained_w2v[word]
+        else:
+            _word = _fix_oov_word(pretrained_w2v, word, count, filter_vocab)
+            if filter_vocab and _word == '<UNK>':
+                oov_words.append((word, count))
+                continue
+            if _word in pretrained_w2v and _word not in embeddings:
+                embeddings[_word] = pretrained_w2v[_word]
+            else:
+                oov_words.append(word)
+                embeddings[_word] = np.random.uniform(
+                    -0.5, 0.5, WORD_EMBED_DIM)
+
+    print(len(oov_words), 'words were not found in the pre-trained embedding.')
+    return list(embeddings.keys()), torch.Tensor(list(embeddings.values()))
+
+
+def _fix_oov_word(vocab, word, count=0, filter=False):
+    if word in ["i'll", "i've", "i'm", "i'd"]:
+        return word.replace('i', 'I')
+    if word.lower() in vocab:
+        return word.lower()
+
+    if not filter:
+        return word
+
+    try:
+        float(word)
+        return '<NUM>'
+    except ValueError:
+        if count > 100:
+            return word
+        if word[0].isupper():
+            return '<ENTITY>'
+        return '<UNK>'
