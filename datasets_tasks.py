@@ -40,19 +40,28 @@ class CoNLL2003(Corpus):
 
 
 class ZuCo_Task(_CrossValidator):
-    def __init__(self, task='sentiment', batch_size=32, gaze_data=None):
+    def __init__(self, task='sentiment', batch_size=32, gaze_data=None,
+                 et_predictor_model=None, vocab=None):
         self.batch_size = batch_size
+        self.filter_vocab = False
 
         _zuco = ZuCo(normalize=True, task=task)
         self.sentences = _zuco.sentences
         self.sentences_et = np.array(_zuco.sentences_et)
-
-        self.use_gaze = (True if (gaze_data and gaze_data.lower() == 'own')
-                         else False)
+        self.max_seq_len = max([len(s) for s in self.sentences])
 
         self.build_vocabulary()
+        if gaze_data and gaze_data.lower() != 'own':
+            self.et_predictor_model = et_predictor_model
+            # self.vocabulary = vocab
+            # self.word_embeddings = et_predictor_model.word_embedding.weight.detach().cpu()
+
         self.indexed_sentences = index_sentences(
             self.sentences, self.vocabulary)
+        if et_predictor_model:
+            print('Running sentences through ET predictor...')
+            self.sentences_et = self.et_predictor_model.sentences_to_et(
+                self.indexed_sentences, self.max_seq_len)
 
         self.task_num = (1 if task == 'sentiment' else
                          2 if task == 'normal' else
@@ -74,7 +83,8 @@ class ZuCo_Task(_CrossValidator):
         self.labels += 1  # (-1, 0, 1) to (0, 1, 2)
 
     def _get_dataset(self, indices):
-        et_features = None if not self.use_gaze else self.sentences_et[indices]
+        et_features = (self.sentences_et[indices]
+                       if self.sentences_et is not None else None)
         return _SplitDataset(self.max_seq_len,
                              self.indexed_sentences[indices],
                              self.labels[indices],

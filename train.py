@@ -113,13 +113,10 @@ for k, (train_loader, test_loader) in enumerate(
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    model = EyeTrackingPredictor(dataset.word_embeddings.clone(),
-                                 dataset.max_seq_len, len(ET_FEATURES))
-    if USE_CUDA:
-        model = model.cuda()
+    model = EyeTrackingPredictor(dataset.word_embeddings.clone())
     optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
     optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, factor=0.5, patience=2, verbose=False)
+        optimizer, factor=0.1, patience=2, verbose=False)
 
     best_epochs = []
     e_tr_losses = []
@@ -160,21 +157,26 @@ print('\nCV Mean Test Loss:', np.mean(te_losses))
 print(torch.stack(te_losses_).mean(0))
 
 if args.save_model is not False:
-    mean_epoch = np.mean(best_epochs)
+    mean_epoch = int(round(np.mean(best_epochs)))
     print('Will save final model. Will now train on all data points.')
     print('Mean number of epochs until overfit:', mean_epoch)
 
-    model = EyeTrackingPredictor(initial_word_embedding.clone(),
-                                 dataset.max_seq_len, len(ET_FEATURES))
-    optimizer = torch.optim.Adam(model.parameters(), lr=INITIAL_LR)
+    model = EyeTrackingPredictor(dataset.word_embeddings.clone(),
+                                 len(ET_FEATURES))
+    if USE_CUDA:
+        model = model.cuda()
+    optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
     # hacky and i love it :(
     for train_loader, test_loader in dataset.split_cross_val(
             num_folds=2, stratified=False):
-        for e in range(round(mean_epoch)):
+        for e in range(mean_epoch):
             loss_1, loss_1_ = iterate(train_loader)
             loss_2, loss_2_ = iterate(test_loader)
         break
 
-    import pdb; pdb.set_trace()
+    print('Loss:', (loss_1 + loss_2) / 2, (loss_1_ + loss_2_) / 2)
     model_datasets = ''.join([corpus[0] for corpus in corpus_list]).upper()
-    torch.save(model.state_dict(), TRAINED_ET_MODEL_DIR.format(model_datasets))
+    torch.save({
+        'vocabulary': dataset.vocabulary,
+        'model_state_dict': model.state_dict()
+    }, TRAINED_ET_MODEL_DIR.format(model_datasets))

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, StratifiedKFold
 from gensim.models import KeyedVectors
 
@@ -23,18 +23,13 @@ class Corpus(Dataset):
         self.sentences_et_original = []
         self.normalize = normalize
         if self.normalize:
-            self.normalizer = RobustScaler()
+            self.normalizer = StandardScaler()
         print('Initializing', self.name)
         self.load_corpus()
 
     def clean_str(self, string):
         """
-        Note that this will always be used PER-WORD, not PER-SENTENCE.
-        mostly copy pasted from Hollenstein's code...
-
-        had to change some because it messes up the matching of the words
-        in a sentence :fearful:
-        (removes 'words' such as '...' that actually have ET features!)
+        Note that this will always be used PER-WORD, not PER-SENTENCE.)
         """
         string = re.sub(r'([a-zA-Z ])(\.)+', r'\1', string.strip())
         string = string.replace(",", "")
@@ -345,7 +340,7 @@ corpus_classes = {'PROVO': PROVO, 'GECO': GECO, 'UCL': UCL}
 class _CrossValidator:
     def split_cross_val(self, num_folds=10, stratified=True):
         k_fold = StratifiedKFold if stratified else KFold
-        k_fold = k_fold(num_folds, shuffle=True, random_state=321)
+        k_fold = k_fold(num_folds, shuffle=True, random_state=111)
         splitter = k_fold.split(np.zeros(len(self.sentences)),
                                 self.labels if stratified else None)
         for train_indices, test_indices in splitter:
@@ -410,13 +405,6 @@ class CorpusAggregator(_CrossValidator):
                 # if not aggregately normalizing, store the corpus'
                 # respective normalizers instead
                 self.normalizers[corpus] = corpus_.normalizer
-
-            long_sentences = []
-            for sss in corpus_.sentences:
-                if len(sss) > 60:
-                    long_sentences.append(sss)
-            if len(long_sentences) > 1:
-                import pdb; pdb.set_trace()
 
         self.max_seq_len = max([len(s) for s in self.sentences])
         print('Max sentence length:', self.max_seq_len)
@@ -483,8 +471,12 @@ class _SplitDataset(Dataset):
                     self.aggregate_indices[i])
         elif self.et_features is not None:
             # used for NLP tasks with gaze data
-            et_feature = F.pad(torch.Tensor(self.et_features[i]),
-                               (0, 0, 0, missing_dims))
+            if isinstance(self.et_features, torch.Tensor):
+                # no need to pad
+                et_feature = self.et_features[i]
+            else:
+                et_feature = F.pad(torch.Tensor(self.et_features[i]),
+                                   (0, 0, 0, missing_dims))
             return sentence, et_feature, self.targets[i]
         else:
             # used for NLP tasks without gaze data
@@ -509,7 +501,7 @@ def print_normalizer_stats(caller, normalizer):
         print('mean:', normalizer.mean_)
 
 
-def index_sentences(sentences, vocabulary, filter):
+def index_sentences(sentences, vocabulary, filter=False):
     def _get_index(w):
         w = w if w in vocabulary else _fix_oov_word(vocabulary, w, filter=filter)
         return vocabulary[w]
@@ -528,9 +520,9 @@ def init_word_embedding_from_word2vec(sentences, filter_vocab=True):
 
     counter = Counter(np.hstack(sentences))
     embeddings = {
-        '<UNK>': np.random.uniform(-0.5, 0.5, WORD_EMBED_DIM),
-        '<NUM>': np.random.uniform(-0.5, 0.5, WORD_EMBED_DIM),
-        '<ENTITY>': np.random.uniform(-0.5, 0.5, WORD_EMBED_DIM)
+        '<UNK>': np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM),
+        '<NUM>': np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM),
+        '<ENTITY>': np.random.uniform(-0.25, 0.25, WORD_EMBED_DIM)
     } if filter_vocab else {}
 
     oov_words = []
@@ -547,7 +539,7 @@ def init_word_embedding_from_word2vec(sentences, filter_vocab=True):
             else:
                 oov_words.append(word)
                 embeddings[_word] = np.random.uniform(
-                    -0.5, 0.5, WORD_EMBED_DIM)
+                    -0.25, 0.25, WORD_EMBED_DIM)
 
     print(len(oov_words), 'words were not found in the pre-trained embedding.')
     return list(embeddings.keys()), torch.Tensor(list(embeddings.values()))
