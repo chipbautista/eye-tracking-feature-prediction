@@ -105,7 +105,6 @@ if do_cross_validation:
     print('\n--- STARTING CROSS-VALIDATION ---')
 
     best_test_xe = []
-    best_train_metrics = []
     best_test_metrics = []
 
     for k, (train_loader, test_loader) in enumerate(
@@ -113,25 +112,26 @@ if do_cross_validation:
 
         _start_time = time.time()
         train_losses = []
-        train_metrics = []
+        # train_metrics = []
         test_losses = []
         test_metrics = []
 
-        model = NLPTaskClassifier(dataset.word_embeddings.clone(), lstm_units,
-                                  dataset.max_seq_len, dataset.num_classes,
+        model = NLPTaskClassifier(dataset.vocabulary.word_embeddings.clone(),
+                                  lstm_units, dataset.max_seq_len,
+                                  dataset.num_classes,
                                   use_gaze=args.gaze_data is not False)
 
         # optimizer = torch.optim.Adam(model.parameters(), lr=float(args.lr))
         optimizer = torch.optim.SGD(model.parameters(), lr=float(args.lr),
                                     momentum=0.95, nesterov=True)
-        optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, factor=0.5, patience=2, verbose=False)
+        # optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        #     optimizer, factor=0.5, patience=2, verbose=True)
 
         for e in range(int(args.num_epochs)):
             model.train()
             train_loss, train_metrics_ = iterate(train_loader)
             train_losses.append(train_loss)
-            train_metrics.append(train_metrics_)
+            # train_metrics.append(train_metrics_)
 
             model.eval()
             test_loss, test_metrics_ = iterate(test_loader)
@@ -149,7 +149,6 @@ if do_cross_validation:
         _print_metrics(test_metrics[best_epoch], 'test')
 
         best_test_xe.append(test_losses[best_epoch])
-        best_train_metrics.append(train_metrics[best_epoch])
         best_test_metrics.append(test_metrics[best_epoch])
 
     print('[Mean Test XE]', np.mean(best_test_xe))
@@ -162,15 +161,3 @@ if do_cross_validation:
 else:
     train_loss = iterate(train_loader)
     test_loss = iterate(test_loader)
-
-"""
-zuco-sentiment
-w/o gaze:
-accuracy: 0.57 f1: 0.56 precision: 0.61 recall: 0.57 
-
-w/ own gaze:
-accuracy: 0.59 f1: 0.58 precision: 0.60 recall: 0.59
-
-w/ predicted gaze:
-
-"""

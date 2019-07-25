@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 import torch
 import numpy as np
 
-from datasets import CorpusAggregator
+from data import CorpusAggregator
 from model import EyeTrackingPredictor
 from settings import *
 
@@ -113,7 +113,7 @@ for k, (train_loader, test_loader) in enumerate(
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    model = EyeTrackingPredictor(dataset.word_embeddings.clone())
+    model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone())
     optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
     optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.1, patience=2, verbose=False)
@@ -161,7 +161,7 @@ if args.save_model is not False:
     print('Will save final model. Will now train on all data points.')
     print('Mean number of epochs until overfit:', mean_epoch)
 
-    model = EyeTrackingPredictor(dataset.word_embeddings.clone(),
+    model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
                                  len(ET_FEATURES))
     if USE_CUDA:
         model = model.cuda()
@@ -177,6 +177,6 @@ if args.save_model is not False:
     print('Loss:', (loss_1 + loss_2) / 2, (loss_1_ + loss_2_) / 2)
     model_datasets = ''.join([corpus[0] for corpus in corpus_list]).upper()
     torch.save({
-        'vocabulary': dataset.vocabulary,
+        'vocabulary': dataset.vocabulary.vocabulary,
         'model_state_dict': model.state_dict()
     }, TRAINED_ET_MODEL_DIR.format(model_datasets))

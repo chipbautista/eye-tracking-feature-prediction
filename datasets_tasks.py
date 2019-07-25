@@ -2,8 +2,8 @@ import pandas as pd
 import numpy as np
 from sklearn.datasets import load_files
 
-from datasets import (Corpus, ZuCo, _CrossValidator,
-                      index_sentences, _SplitDataset)
+from datasets_corpus import Corpus, ZuCo
+from data import _CrossValidator, _SplitDataset, Vocabulary
 
 
 # instead of passing this on to a train/test splitter,
@@ -50,14 +50,12 @@ class ZuCo_Task(_CrossValidator):
         self.sentences_et = np.array(_zuco.sentences_et)
         self.max_seq_len = max([len(s) for s in self.sentences])
 
-        self.build_vocabulary()
+        self.vocabulary = Vocabulary(self.sentences)
         if gaze_data and gaze_data.lower() != 'own':
             self.et_predictor_model = et_predictor_model
-            # self.vocabulary = vocab
-            # self.word_embeddings = et_predictor_model.word_embedding.weight.detach().cpu()
 
-        self.indexed_sentences = index_sentences(
-            self.sentences, self.vocabulary)
+        self.indexed_sentences = self.vocabulary.index_sentences(
+            self.sentences)
         if et_predictor_model:
             print('Running sentences through ET predictor...')
             self.sentences_et = self.et_predictor_model.sentences_to_et(
