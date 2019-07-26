@@ -41,25 +41,36 @@ class CoNLL2003(Corpus):
 
 class ZuCo_Task(_CrossValidator):
     def __init__(self, task='sentiment', batch_size=32, gaze_data=None,
-                 et_predictor_model=None, vocab=None):
+                 et_predictor_model=None, et_predictor_vocab=None,
+                 use_predictor_vocab=False, filter_vocab=False):
         self.batch_size = batch_size
         self.filter_vocab = False
+        self.use_gaze = gaze_data is not None
 
         _zuco = ZuCo(normalize=True, task=task)
         self.sentences = _zuco.sentences
         self.sentences_et = np.array(_zuco.sentences_et)
         self.max_seq_len = max([len(s) for s in self.sentences])
 
-        self.vocabulary = Vocabulary(self.sentences)
-        if gaze_data and gaze_data.lower() != 'own':
-            self.et_predictor_model = et_predictor_model
-
-        self.indexed_sentences = self.vocabulary.index_sentences(
-            self.sentences)
-        if et_predictor_model:
+        # Initialize the ET features per sentence
+        if et_predictor_model and et_predictor_vocab:
+            print('\nReceived ET Predictor model and vocab. Vocabulary size:',
+                  len(et_predictor_vocab))
             print('Running sentences through ET predictor...')
-            self.sentences_et = self.et_predictor_model.sentences_to_et(
-                self.indexed_sentences, self.max_seq_len)
+            indexed_sentences = et_predictor_vocab.index_sentences(self.sentences)
+            self.sentences_et = et_predictor_model.sentences_to_et(
+                indexed_sentences=indexed_sentences,
+                max_seq_len=self.max_seq_len)
+
+        # Initialize Vocabulary object
+        print('\nuse_predictor_vocab =', use_predictor_vocab)
+        if use_predictor_vocab:  # assuming that et_predictor_vocab is provided
+            self.vocabulary = et_predictor_vocab
+            self.indexed_sentences = indexed_sentences
+        else:
+            self.vocabulary = Vocabulary(self.sentences, filter_vocab)
+            self.indexed_sentences = self.vocabulary.index_sentences(
+                self.sentences)
 
         self.task_num = (1 if task == 'sentiment' else
                          2 if task == 'normal' else
@@ -82,7 +93,7 @@ class ZuCo_Task(_CrossValidator):
 
     def _get_dataset(self, indices):
         et_features = (self.sentences_et[indices]
-                       if self.sentences_et is not None else None)
+                       if self.use_gaze else None)
         return _SplitDataset(self.max_seq_len,
                              self.indexed_sentences[indices],
                              self.labels[indices],

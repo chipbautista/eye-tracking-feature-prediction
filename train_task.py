@@ -16,9 +16,9 @@ def _print_metrics(metrics, split):
     text = '[{}]: '.format(split)
     for k, v in metrics.items():
         if type(v) == np.float64:
-            text += ' {}: {:.2f}'.format(k, v)
+            text += ' {}: {:.4f}'.format(k, v)
         else:
-            text += ' {}: {:.2f} '.format(k, np.mean(v))
+            text += ' {}: {:.4f} '.format(k, np.mean(v))
     print(text, '\n')
 
 
@@ -69,6 +69,7 @@ parser.add_argument('--gaze-data', default=False,
 parser.add_argument('--lr', default=0.01)
 parser.add_argument('--num-epochs', default=85)
 parser.add_argument('--batch-size', default=32)
+parser.add_argument('--use-predictor-vocab', default='False')
 args = parser.parse_args()
 
 
@@ -79,7 +80,8 @@ else:
 
 if 'zuco' in args.dataset:
     dataset = ZuCo_Task(args.dataset.split('-')[-1], int(args.batch_size),
-                        args.gaze_data, et_predictor, vocab)
+                        args.gaze_data, et_predictor, vocab,
+                        use_predictor_vocab=args.use_predictor_vocab != 'False')
     lstm_units = 150
     do_cross_validation = True
 elif args.dataset == 'imdb':

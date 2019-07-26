@@ -1,8 +1,7 @@
 
 import torch
-# from flair import TokenEmbeddings
+from flair.embeddings import TokenEmbeddings
 
-from datasets import index_sentences
 from settings import *
 
 torch.manual_seed(111)
@@ -40,14 +39,25 @@ class EyeTrackingPredictor(torch.nn.Module):
         return et_pred.reshape(x.shape[0], -1, self.out_features)
 
     def sentences_to_et(self, indexed_sentences, max_seq_len):
-        # for downstream use!
+        """for downstream use"""
+        pad_start_indices = []
         padded_indices = []
+
+        # pad
         for sent in indexed_sentences:
             missing_dims = max_seq_len - len(sent)
+            pad_start_indices.append(len(sent))
             padded_indices.append(
                 torch.nn.functional.pad(torch.Tensor(sent),
                                         (0, missing_dims)))
-        return self.forward(torch.stack(padded_indices).long()).cpu().detach()
+
+        predictions = self.forward(torch.stack(padded_indices).long())
+
+        # revert paddings to 0
+        for pred, pad_start in zip(predictions, pad_start_indices):
+            pred[pad_start:] = 0
+
+        return predictions.cpu().detach()
 
 
 class NLPTaskClassifier(torch.nn.Module):
@@ -109,32 +119,39 @@ class NLPTaskClassifier(torch.nn.Module):
         return logits
 
 
-# class FlairEyeTrackingEmbedding(TokenEmbeddings):
-#     def __init__(self, et_predictor, vocabulary):
-#         self.name = 'et_features'
-#         self.et_predictor = et_predictor
-#         self.vocabulary = vocabulary
-#         # - Instantiate EyeTrackingPredictor with weights
-#         # - Should also store dictionary! ^
-#         super().__init__()
+class EyeTrackingFeatureEmbedding(TokenEmbeddings):
+    def __init__(self, model_path):
+        super().__init__()
+        self.name = 'et_features'
+        self.et_predictor, self.vocabulary = load_pretrained_et_predictor(
+            model_path)
+        self.et_predictor.cuda()
+        # - Instantiate EyeTrackingPredictor with weights
+        # - Should also store dictionary! ^
 
-#     @property
-#     def embedding_length(self) -> int:
-#         return self.__embedding_length
+    @property
+    def embedding_length(self):
+        return 5
 
-#     def _add_embeddings_internal(self, sentences):
-#         """
-#         Flow:
-#         - Tokenize sentences into its actual words
-#         - Pass the sentence through predictor
-#         - Use predictor outputs to do token.set_embedding
-#         """
-#         # WARNING! this `sentences` object is not a list, but a Flair object
-#         indexed_sentences = index_sentences(sentences, self.vocabulary)
-#         predicted_ets = self.et_predictor(indexed_sentences)
-#         for sentence, predicted_et in zip(sentences, predicted_ets):
-#             for token, token_et in zip(sentence.tokens, predicted_et):
-#                 token.set_embedding(self.name, token_et)
+    def _add_embeddings_internal(self, flair_sentences):
+        """
+        Flow:
+        - Tokenize sentences into its actual words
+        - Use predictor outputs to do token.set_embedding
+        - Pass the sentence through predictor
+        """
+        # print(flair_sentences)
+        _sentences = [[token.text for token in sentence.tokens]
+                      for sentence in flair_sentences]
+        indexed_sentences = self.vocabulary.index_sentences(_sentences)
+
+        for sent, flair_sent in zip(indexed_sentences, flair_sentences):
+            et_features = self.et_predictor(
+                torch.Tensor([sent]).long().cuda()).detach().cpu()
+            for et_feat, token in zip(et_features[0], flair_sent.tokens):
+                token.set_embedding('ET_feature', et_feat)
+
+        return flair_sentences
 
 #     # from WordEmbeddings:
 #     def _add_embeddings_internal(

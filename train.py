@@ -69,6 +69,7 @@ parser.add_argument('--normalize-aggregate', default='False')
 parser.add_argument('--filter-vocab', default='False')
 parser.add_argument('--save-model', default=False)
 parser.add_argument('--num-epochs', default=str(NUM_EPOCHS))
+parser.add_argument('--batch-size', default=str(BATCH_SIZE))
 parser.add_argument('--lr', default=str(INITIAL_LR))
 args = parser.parse_args()
 
@@ -99,6 +100,7 @@ mae_loss = torch.nn.L1Loss(reduction='sum')
 print('--- PARAMETERS ---')
 print('Learning Rate:', eval(args.lr))
 print('# Epochs:', eval(args.num_epochs))
+print('Batch Size:', eval(args.batch_size))
 print('LSTM Hidden Units:', LSTM_HIDDEN_UNITS)
 print('Number of sentences:', len(dataset))
 print('\n--- Starting training (10-CV) ---')
@@ -175,8 +177,21 @@ if args.save_model is not False:
         break
 
     print('Loss:', (loss_1 + loss_2) / 2, (loss_1_ + loss_2_) / 2)
-    model_datasets = ''.join([corpus[0] for corpus in corpus_list]).upper()
+
+    # just building the filename...
+    model_datasets = ''
+    for corpus in corpus_list:
+        if '-' in corpus:
+            _corpus = corpus.split('-')
+            model_datasets += _corpus[0][0] + _corpus[1][0]
+        else:
+            model_datasets += corpus[0]
+
+    filename = TRAINED_ET_MODEL_DIR.format(model_datasets)
+    if eval(args.filter_vocab):
+        filename += '-UNK'
     torch.save({
-        'vocabulary': dataset.vocabulary.vocabulary,
+        'vocabulary': dataset.vocabulary,
         'model_state_dict': model.state_dict()
-    }, TRAINED_ET_MODEL_DIR.format(model_datasets))
+    }, filename)
+    print('Model trained on', corpus_list, 'saved to:', filename)

@@ -158,6 +158,7 @@ class _SplitDataset(Dataset):
 
 class Vocabulary:
     def __init__(self, sentences, filter_vocab=False):
+        print('\nInitializing new Vocabulary object...')
         self.filter_vocab = filter_vocab
         vocab, self.word_embeddings = self._init_word_embedding_from_word2vec(
             sentences)
@@ -184,6 +185,7 @@ class Vocabulary:
         counter = Counter(np.hstack(sentences))
         embeddings = {'<PAD>': _init_embed(), '<UNK>': _init_embed()}
         if self.filter_vocab:
+            # just to make sure these will always be part of the vocab
             embeddings.update({
                 '<NUM>': _init_embed(),
                 '<ENTITY>': _init_embed()
@@ -229,22 +231,22 @@ class Vocabulary:
 
         if not self.filter_vocab:
             # then just put any unknown word into vocab
-            return word, False
+            return word.lower(), False
 
         # else, try to categorize them further
         try:
             # if float() does not raise ValueError then it's a number
             float(word)
-            return '<NUM>', True
+            return '<NUM>', False
         except ValueError:
             # if the word occurs frequently then just add it to vocab
             if count > 100:
                 return word, False
             # if the first letter is uppercase then it might be a proper noun
-            if word[0].isupper():
-                return '<ENTITY>', True
+            if word and word[0].isupper():
+                return '<ENTITY>', False
             # else, just return UNK tag
-            return '<UNK>', True
+            return '<UNK>', False
 
     def get_index(self, word):
         return self.vocabulary[self._fix_word(self.vocabulary, word)[0]]
@@ -254,3 +256,6 @@ class Vocabulary:
 
     def __contains__(self, key):
         return key in self.vocabulary
+
+    def __len__(self):
+        return len(self.vocabulary)
