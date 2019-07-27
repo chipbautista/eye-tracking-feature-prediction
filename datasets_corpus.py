@@ -2,20 +2,45 @@ import re
 
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 
 
-class Corpus(Dataset):
+class Corpus:
     def __init__(self, normalize):
+        # the following will be filled up by `load_corpus()`
         self.sentences = []
+        self.sentence_word_lengths = []
         self.sentences_et = []
+
+        # will be created by `normalize_et`
         self.sentences_et_original = []
-        self.normalize = normalize
-        if self.normalize:
-            self.normalizer = StandardScaler()
-        print('Initializing', self.name)
-        self.load_corpus()
+
+        self.normalizer = StandardScaler() if normalize else None
+
+        print('\n===== Initializing', self.name, '=====')
+        # for the case of GECO (and possibly the other data sets later on),
+        # load_corpus() will return None when it finds an `.npy` file
+        # which contains previously-extracted corpus data. This saves time!
+        feature_values = self.load_corpus()
+        if feature_values:
+            if self.normalizer:
+                feature_values = np.array(feature_values)
+                self.print_stats(feature_values)
+
+                # default value for nFixations should be 0
+                _nans = np.argwhere(np.isnan(feature_values[0]))
+                feature_values[0][_nans] = 0
+
+                # default value for other features should be nan
+                for features in feature_values[1:]:
+                    _zeros = np.where(features == 0)[0]
+                    features[_zeros] = np.nan
+
+                self.normalizer.fit(feature_values.T)
+                self.normalize_et()
+                print_normalizer_stats(self.name, self.normalizer)
+
+            self._save_to_file()
 
     def clean_str(self, string):
         """
@@ -53,10 +78,12 @@ class Corpus(Dataset):
         if arr is not None:
             print('\n' + self.name, 'ET minimum values:', np.nanmin(arr, 1))
             print(self.name, 'ET maximum values:', np.nanmax(arr, 1))
-        print_normalizer_stats(self.name, self.normalizer)
 
     def __len__(self):
         return len(self.sentences)
+
+    def _save_to_file(self):  # currently used by GECO
+        pass
 
 
 class ZuCo(Corpus):
@@ -79,8 +106,9 @@ class ZuCo(Corpus):
 
         sentences = np.load(self.directory, allow_pickle=True)
         for sentence in sentences:
-            self.sentences.append([self.clean_str(w)
-                                   for w in sentence['words']])
+            sent_words = [self.clean_str(w) for w in sentence['words']]
+            self.sentences.append(sent_words)
+            self.sentence_word_lengths.append([len(w) for w in sent_words])
             features = np.array([sentence[f] for f in self.et_features])
 
             features[0] = np.nan_to_num(features[0])
@@ -92,10 +120,7 @@ class ZuCo(Corpus):
             features = np.nanmean(features.T, axis=1)
             self.sentences_et.append(features)
 
-        if self.normalize:
-            self.normalizer.fit(np.array(_feature_values).T)
-            self.print_stats(np.array(_feature_values))
-            self.normalize_et()
+        return _feature_values
 
 
 class GECO(Corpus):
@@ -109,8 +134,11 @@ class GECO(Corpus):
     """
     def __init__(self, normalize=True):
         self.name = 'GECO'
-        self.directory = '../data/GECO Corpus/MonolingualReadingData.xlsx'
-        self.pre_extracted = '../data/GECO Corpus/pre-extracted{}.npy'
+        self.num_participants = 14
+        self.directory = '../data/GECO Corpus/{}.xlsx'
+        self.pre_extracted_dir = '../data/GECO Corpus/pre-extracted{}.npy'.format(
+            '-normalized' if normalize else '')
+
         self.et_features = {
             'nFixations': 'WORD_FIXATION_COUNT',
             'FFD': 'WORD_FIRST_FIXATION_DURATION',
@@ -118,75 +146,87 @@ class GECO(Corpus):
             'GD': 'WORD_GAZE_DURATION',
             'GPT': 'WORD_GO_PAST_TIME'
         }
+
         super(GECO, self).__init__(normalize)
+        import pdb; pdb.set_trace()
 
     def load_corpus(self):
-        pre_extracted_dir = self.pre_extracted.format(
-            '-normalized' if self.normalize else '')
+        def _get_word_features(word_id):
+            """
+            Helper function so that we can extract the ET features per word
+            using a list comprehension
+            """
+            values = geco_df[geco_df['WORD_ID'] == word_id
+                             ][self.et_features.values()].values
+            if np.any(values):
+                return values
+            else:
+                # happens when a word is NEVER fixated on
+                values = np.zeros(
+                    (self.num_participants, len(self.et_features)))  # (14, 5)
+                values.fill(np.NaN)
+                return values
+
+        # To save time, try to load GECO's variables from previous run
         try:
-            (self.sentences, self.sentences_et,
+            (self.sentences, self.sentences_et, self.sentence_word_lengths,
                 self.sentences_et_original, self.normalizer) = np.load(
-                pre_extracted_dir, allow_pickle=True)
-            print('\tGECO is loaded from file.\n')
-            return
+                self.pre_extracted_dir, allow_pickle=True)
+            print('GECO is loaded from file.\n')
+            return None
         except FileNotFoundError:
-            print('Pre-extracted GECO is not found in', pre_extracted_dir,
+            print('Pre-extracted GECO is not found in', self.pre_extracted_dir,
                   'Extracting it now...')
 
+        # just for stats...
+        _unique_tokens = set([])
+
+        # store all the values in here for use in normalization
         _feature_values = [[], [], [], [], []]
-        geco_df = pd.read_excel(self.directory)
-        # per part
-        for part in geco_df['PART'].unique():
-            _df = geco_df[geco_df['PART'] == part]
 
-            # Per trial. There are multiple sentences per trial!
-            for trial in _df['TRIAL'].unique():
-                __df = _df[_df['TRIAL'] == trial]
+        # load data
+        material_df = pd.read_excel(self.directory.format('EnglishMaterial'))
+        geco_df = pd.read_excel(self.directory.format('MonolingualReadingData'))
 
-                # need to break it down to individual sentences
-                word_ids = __df['WORD_ID_WITHIN_TRIAL'].unique()
-                words = __df['WORD'][:len(word_ids)].values.astype(str)
+        # do this per sentence!
+        sentence_ids = material_df['SENTENCE_ID'].unique().astype('str')
+        print('Found', len(sentence_ids), 'unique sentence IDs.')
 
-                sentence_words = []
-                sentence_et = []
-                for word_id, word in zip(word_ids, words):
-                    sentence_words.append(word.strip())
+        for sent_id in sentence_ids:
+            if sent_id == 'nan':
+                continue
 
-                    ___df = __df[__df['WORD_ID_WITHIN_TRIAL'] == word_id]
-                    features = ___df[self.et_features.values()].values
-                    features[features == '.'] = np.NaN
-                    features = features.astype(float)
+            sent_info = material_df[material_df['SENTENCE_ID'] == sent_id]
+            sent_words = sent_info['WORD'].values.astype('str')
+            _unique_tokens = _unique_tokens.union(set(sent_words))
 
-                    if np.nan_to_num(features).any():
-                        for i in range(5):
-                            _feature_values[i].extend(features.T[i])
+            self.sentences.append([self.clean_str(w)
+                                   for w in sent_words])
+            self.sentence_word_lengths.append(sent_info['WORD_LENGTH'].values)
 
-                    features_mean = np.nanmean(features, axis=0)
-                    sentence_et.append(features_mean)
+            # extract and clean eye-tracking data
+            features = np.array([
+                _get_word_features(word_id)
+                for word_id in sent_info['WORD_ID'].unique()
+            ])
+            features[features == '.'] = np.NaN
+            features = features.astype(float)
 
-                    # consider this a complete sentence and append
-                    # to the final list.
-                    if (word.endswith('.') and
-                            word.upper().lower()[-4:] not in [
-                                'mrs.', ' mr.', ' dr.']):
-                        self.sentences.append([self.clean_str(w)
-                                               for w in sentence_words])
-                        self.sentences_et.append(np.array(sentence_et))
-                        sentence_words = []
-                        sentence_et = []
+            for i in range(5):
+                _feature_values[i].extend(features[:, :, i].flatten())
 
-        if self.normalize:
-            self.normalizer.fit(np.array(_feature_values).T)
-            self.print_stats(np.array(_feature_values))
-            self.normalize_et()
+            self.sentences_et.append(np.nanmean(features, axis=1))
 
-        _normalizer = self.normalizer if self.normalize else None
-        np.save(pre_extracted_dir,
-                (self.sentences, self.sentences_et,
-                 self.sentences_et_original, _normalizer),
+        print('Found', len(_unique_tokens), 'unique words.')
+        return _feature_values
+
+    def _save_to_file(self):
+        np.save(self.pre_extracted_dir,
+                (self.sentences, self.sentences_et, self.sentence_word_lengths,
+                 self.sentences_et_original, self.normalizer),
                 allow_pickle=True)
         print('GECO extracted sentences and sentences_et saved to:',
-              pre_extracted_dir,
+              self.pre_extracted_dir,
               'This will be automatically loaded at the next run.')
 
 
@@ -234,16 +274,19 @@ class PROVO(Corpus):
                 __df = _df[_df['Sentence_Number'] == sent_id]
                 sentence_words = list(__df['Word_Cleaned'].unique())
                 self.sentences.append(sentence_words)
+                self.sentence_word_lengths.append([len(w) for w in sentence_words])
                 # extraction level 3: by word
                 sentence_et = []
 
                 for clean_word in sentence_words:
                     ___df = __df[__df['Word_Cleaned'] == clean_word]
                     features = ___df[self.et_features.values()].values
+
                     # PROVO gives 0 values to TRT/DWELL TIME,
                     # but we want those to be NaN.
-                    _nonzeros = np.where(features[:, 2] == 0)[0]
-                    features[:, 2][_nonzeros] = np.nan
+                    # WILL DO THIS IN Corpus.normalize() instead!
+                    # _nonzeros = np.where(features[:, 2] == 0)[0]
+                    # features[:, 2][_nonzeros] = np.nan
 
                     for i in range(5):
                         _feature_values[i].extend(features.T[i])
@@ -255,10 +298,7 @@ class PROVO(Corpus):
                     sentence_et.append(features)
                 self.sentences_et.append(np.array(sentence_et))
 
-        if self.normalize:
-            self.normalizer.fit(np.array(_feature_values).T)
-            self.print_stats(np.array(_feature_values))
-            self.normalize_et()
+        return _feature_values
 
 
 class UCL(Corpus):
@@ -306,8 +346,10 @@ class UCL(Corpus):
             _df = ucl_df[ucl_df['sent_nr'] == sent_num]
             word_pos = _df.word_pos.unique()
             num_words = word_pos.shape[0]
-            self.sentences.append([self.clean_str(w)
-                                   for w in _df['word'].values[:num_words]])
+            sent_words = [self.clean_str(w)
+                          for w in _df['word'].values[:num_words]]
+            self.sentences.append(sent_words)
+            self.sentence_word_lengths.append([len(w) for w in sent_words])
 
             sentence_et = []
             for wp in word_pos:
@@ -318,10 +360,7 @@ class UCL(Corpus):
             sentence_et = np.array(sentence_et)
             self.sentences_et.append(np.nanmean(sentence_et, axis=1))
 
-        if self.normalize:
-            self.normalizer.fit(np.array(_feature_values).T)
-            self.print_stats(np.array(_feature_values))
-            self.normalize_et()
+        return _feature_values
 
 
 def print_normalizer_stats(caller, normalizer):

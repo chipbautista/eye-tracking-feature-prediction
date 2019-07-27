@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 from gensim.models import KeyedVectors
 from sklearn.model_selection import KFold, StratifiedKFold
+from torch.utils.data import Dataset
 
 from datasets_corpus import *
 from settings import BATCH_SIZE, WORD_EMBED_DIM, WORD_EMBED_MODEL_DIR
