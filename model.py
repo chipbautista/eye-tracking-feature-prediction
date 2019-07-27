@@ -8,15 +8,19 @@ torch.manual_seed(111)
 
 
 class EyeTrackingPredictor(torch.nn.Module):
-    def __init__(self, initial_word_embedding, out_features=5):
+    def __init__(self, initial_word_embedding, out_features=5,
+                 use_word_length=False):
         super(EyeTrackingPredictor, self).__init__()
 
-        self.out_features = out_features
+        word_embed_dim = WORD_EMBED_DIM
+        if use_word_length is not False:
+            word_embed_dim += 1
 
+        self.out_features = out_features
         self.word_embedding = torch.nn.Embedding.from_pretrained(
             initial_word_embedding, freeze=False)
         self.lstm = torch.nn.LSTM(
-            input_size=WORD_EMBED_DIM, hidden_size=LSTM_HIDDEN_UNITS,
+            input_size=word_embed_dim, hidden_size=LSTM_HIDDEN_UNITS,
             num_layers=2, dropout=DROPOUT_PROB, batch_first=True,
             bidirectional=True)
         self.dropout = torch.nn.Dropout(p=DROPOUT_PROB)
@@ -28,11 +32,20 @@ class EyeTrackingPredictor(torch.nn.Module):
         if self.use_cuda:
             self.cuda()
 
-    def forward(self, x):
+    def forward(self, x, word_lengths=None):
         if self.use_cuda:
             x = x.cuda()
+            if word_lengths is not None:
+                word_lengths = word_lengths.cuda()
 
+        _batch_size = x.shape[0]
         word_embeddings = self.word_embedding(x)
+
+        if word_lengths is not None:
+            word_embeddings = torch.cat(
+                (word_embeddings, word_lengths.reshape(_batch_size, -1, 1)),
+                dim=2)
+
         lstm_out, (h_n, c_n) = self.lstm(word_embeddings)
         lstm_out = self.dropout(lstm_out)
         et_pred = self.out(lstm_out.reshape(-1, LSTM_HIDDEN_UNITS * 2))
@@ -143,6 +156,7 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
         # print(flair_sentences)
         _sentences = [[token.text for token in sentence.tokens]
                       for sentence in flair_sentences]
+        import pdb; pdb.set_trace()
         indexed_sentences = self.vocabulary.index_sentences(_sentences)
 
         for sent, flair_sent in zip(indexed_sentences, flair_sentences):

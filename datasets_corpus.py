@@ -129,8 +129,7 @@ class GECO(Corpus):
     Christie. Novel has 4 parts.
     14 participants.
     5,031 sentences
-    (I got to extract only 3,386, though... I may need to modify my
-    method of separating each trial into sentences...)
+    (5,284 in the xlsx)
     """
     def __init__(self, normalize=True):
         self.name = 'GECO'
@@ -148,7 +147,6 @@ class GECO(Corpus):
         }
 
         super(GECO, self).__init__(normalize)
-        import pdb; pdb.set_trace()
 
     def load_corpus(self):
         def _get_word_features(word_id):

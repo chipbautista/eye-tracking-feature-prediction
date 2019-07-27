@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 from gensim.models import KeyedVectors
 from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset
 
 from datasets_corpus import *
@@ -38,18 +39,32 @@ class _CrossValidator:
 
 
 class CorpusAggregator(_CrossValidator):
-    def __init__(self, corpus_list, normalize=False, filter_vocab=False):
+    def __init__(self, corpus_list, normalize=False, filter_vocab=False,
+                 use_word_length=True):
         self.batch_size = BATCH_SIZE
         self.normalize_aggregate = normalize
         self.filter_vocab = filter_vocab
+        self.use_word_length = use_word_length
 
         self.normalizers = {}
         self._index_corpus = []  # to keep track of the data point's corpus
         self.sentences = []
+        self.sentence_word_lengths = []
         self.et_targets = []
         self.et_targets_original = []
 
         self._build_corpus(corpus_list)
+
+        if not self.normalize_aggregate:
+            # need to normalize the word_lengths, though
+            length_scaler = MinMaxScaler()
+            length_scaler.fit(np.hstack(
+                self.sentence_word_lengths).reshape(-1, 1))
+
+            self.sentence_word_lengths = np.array([
+                length_scaler.transform(np.reshape(lengths, (-1, 1))).reshape(-1)
+                for lengths in self.sentence_word_lengths])
+
         self.vocabulary = Vocabulary(self.sentences, filter_vocab)
 
         if self.normalize_aggregate:
@@ -70,6 +85,7 @@ class CorpusAggregator(_CrossValidator):
                 corpus_ = corpus_classes[corpus](not self.normalize_aggregate)
 
             self.sentences.extend(corpus_.sentences)
+            self.sentence_word_lengths.extend(corpus_.sentence_word_lengths)
             self.et_targets.extend(corpus_.sentences_et)
             self.et_targets_original.extend(corpus_.sentences_et_original)
             self._index_corpus.extend([corpus] * len(corpus_))
@@ -105,6 +121,8 @@ class CorpusAggregator(_CrossValidator):
                              self.indexed_sentences[indices],
                              self.et_targets[indices],
                              self.et_targets_original[indices],
+                             word_lengths=(self.sentence_word_lengths[indices]
+                                           if self.use_word_length else None),
                              indices=indices)
 
     def inverse_transform(self, data_index, value):
@@ -120,12 +138,14 @@ class CorpusAggregator(_CrossValidator):
 class _SplitDataset(Dataset):
     """Send the train/test indices here and use as input to DataLoader."""
     def __init__(self, max_seq_len, indexed_sentences, targets,
-                 targets_original=None, et_features=None, indices=None):
+                 targets_original=None, et_features=None, word_lengths=None,
+                 indices=None):
         self.max_seq_len = max_seq_len
         self.indexed_sentences = indexed_sentences
         self.targets = targets
         self.targets_original = targets_original
         self.et_features = et_features
+        self.word_lengths = word_lengths
         self.aggregate_indices = indices
 
     def __len__(self):
@@ -135,14 +155,24 @@ class _SplitDataset(Dataset):
         missing_dims = self.max_seq_len - len(self.indexed_sentences[i])
         sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
                          (0, missing_dims))
+
         if self.targets_original is not None:
             # used when predicting ET features
             et_target = F.pad(torch.Tensor(self.targets[i]),
                               (0, 0, 0, missing_dims))
             et_target_original = F.pad(torch.Tensor(self.targets_original[i]),
                                        (0, 0, 0, missing_dims))
+
+            if self.word_lengths is not None:
+
+                word_lengths = F.pad(torch.Tensor(self.word_lengths[i]),
+                                     (0, missing_dims))
+                return (sentence, et_target, et_target_original, word_lengths,
+                        self.aggregate_indices[i])
+
             return (sentence, et_target, et_target_original,
                     self.aggregate_indices[i])
+
         elif self.et_features is not None:
             # used for NLP tasks with gaze data
             if isinstance(self.et_features, torch.Tensor):

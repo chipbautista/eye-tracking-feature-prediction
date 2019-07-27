@@ -13,14 +13,21 @@ def iterate(dataloader):
     epoch_loss = 0.0
     # loss calculated on the real/original values (not scaled)
     epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
-    for i, (sentences, et_targets,
-            et_targets_orig, indices) in enumerate(dataloader):
+    for i, data in enumerate(dataloader):
+
+        if use_word_length:
+            (sentences, et_targets, et_targets_orig,
+                word_lengths, indices) = data
+        else:
+            (sentences, et_targets, et_targets_orig, indices) = data
+            word_lengths = None
+
         sentences = sentences.type(torch.LongTensor)
         if USE_CUDA:
             sentences = sentences.cuda()
             et_targets = et_targets.cuda()
 
-        et_preds = model(sentences)
+        et_preds = model(sentences, word_lengths)
 
         et_preds_inverse = torch.Tensor([
             dataset.inverse_transform(idx, value)
@@ -66,6 +73,7 @@ parser.add_argument('--provo', default=False)
 parser.add_argument('--geco', default=False)
 parser.add_argument('--ucl', default=False)
 parser.add_argument('--normalize-aggregate', default='False')
+parser.add_argument('--use-word-length', default='True')
 parser.add_argument('--filter-vocab', default='False')
 parser.add_argument('--save-model', default=False)
 parser.add_argument('--num-epochs', default=str(NUM_EPOCHS))
@@ -74,6 +82,8 @@ parser.add_argument('--lr', default=str(INITIAL_LR))
 args = parser.parse_args()
 
 print(args)
+
+use_word_length = eval(args.use_word_length)
 if (args.zuco_1 is False and args.zuco_2 is False and args.zuco_3 is False and
         args.provo is False and args.geco is False and args.ucl is False):
     corpus_list = ['ZuCo-1', 'ZuCo-2', 'ZuCo-3', 'PROVO', 'GECO', 'UCL']
@@ -93,7 +103,8 @@ else:
         corpus_list.append('UCL')
 
 dataset = CorpusAggregator(corpus_list, eval(args.normalize_aggregate),
-                           filter_vocab=eval(args.filter_vocab))
+                           filter_vocab=eval(args.filter_vocab),
+                           use_word_length=use_word_length)
 mse_loss = torch.nn.MSELoss(reduction='sum')
 mae_loss = torch.nn.L1Loss(reduction='sum')
 
@@ -103,6 +114,7 @@ print('# Epochs:', eval(args.num_epochs))
 print('Batch Size:', eval(args.batch_size))
 print('LSTM Hidden Units:', LSTM_HIDDEN_UNITS)
 print('Number of sentences:', len(dataset))
+print('Use word length:', use_word_length)
 print('\n--- Starting training (10-CV) ---')
 
 te_losses = []
@@ -115,7 +127,8 @@ for k, (train_loader, test_loader) in enumerate(
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone())
+    model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
+                                 use_word_length=use_word_length)
     optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
     optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.1, patience=2, verbose=False)
@@ -164,14 +177,14 @@ if args.save_model is not False:
     print('Mean number of epochs until overfit:', mean_epoch)
 
     model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
-                                 len(ET_FEATURES))
+                                 use_word_length=use_word_length)
     if USE_CUDA:
         model = model.cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
     # hacky and i love it :(
     for train_loader, test_loader in dataset.split_cross_val(
             num_folds=2, stratified=False):
-        for e in range(mean_epoch):
+        for e in range(mean_epoch + 3):
             loss_1, loss_1_ = iterate(train_loader)
             loss_2, loss_2_ = iterate(test_loader)
         break
@@ -190,6 +203,8 @@ if args.save_model is not False:
     filename = TRAINED_ET_MODEL_DIR.format(model_datasets)
     if eval(args.filter_vocab):
         filename += '-UNK'
+    if use_word_length:
+        filename += '-WL'
     torch.save({
         'vocabulary': dataset.vocabulary,
         'model_state_dict': model.state_dict()
