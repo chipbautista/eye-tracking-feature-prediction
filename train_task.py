@@ -23,11 +23,12 @@ def _print_metrics(metrics, split):
 
 
 def _get_metrics(targets, predictions):
+    ave_method = 'macro'
     return {
         'accuracy': accuracy_score(targets, predictions),
-        'f1': f1_score(targets, predictions, average='weighted'),
-        'precision': precision_score(targets, predictions, average='weighted'),
-        'recall': recall_score(targets, predictions, average='weighted')
+        'f1': f1_score(targets, predictions, average=ave_method),
+        'precision': precision_score(targets, predictions, average=ave_method),
+        'recall': recall_score(targets, predictions, average=ave_method)
     }
 
 
@@ -114,7 +115,6 @@ if do_cross_validation:
 
         _start_time = time.time()
         train_losses = []
-        # train_metrics = []
         test_losses = []
         test_metrics = []
 
@@ -123,23 +123,18 @@ if do_cross_validation:
                                   dataset.num_classes,
                                   use_gaze=args.gaze_data is not False)
 
-        # optimizer = torch.optim.Adam(model.parameters(), lr=float(args.lr))
         optimizer = torch.optim.SGD(model.parameters(), lr=float(args.lr),
                                     momentum=0.95, nesterov=True)
-        # optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        #     optimizer, factor=0.5, patience=2, verbose=True)
 
         for e in range(int(args.num_epochs)):
             model.train()
             train_loss, train_metrics_ = iterate(train_loader)
             train_losses.append(train_loss)
-            # train_metrics.append(train_metrics_)
 
             model.eval()
             test_loss, test_metrics_ = iterate(test_loader)
             test_losses.append(test_loss)
             test_metrics.append(test_metrics_)
-            # optim_scheduler.step(test_loss)
 
             # print(k, e, train_loss, test_loss)
 

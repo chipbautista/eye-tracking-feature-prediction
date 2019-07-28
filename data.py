@@ -1,3 +1,4 @@
+import pickle
 from collections import Counter
 
 import torch
@@ -7,6 +8,7 @@ from gensim.models import KeyedVectors
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset
+from allennlp.commands.elmo import ElmoEmbedder
 
 from datasets_corpus import *
 from settings import BATCH_SIZE, WORD_EMBED_DIM, WORD_EMBED_MODEL_DIR
@@ -40,11 +42,13 @@ class _CrossValidator:
 
 class CorpusAggregator(_CrossValidator):
     def __init__(self, corpus_list, normalize=False, filter_vocab=False,
-                 use_word_length=True):
+                 use_word_length=False, use_elmo_embeddings=False):
         self.batch_size = BATCH_SIZE
         self.normalize_aggregate = normalize
         self.filter_vocab = filter_vocab
         self.use_word_length = use_word_length
+        self.use_elmo_embeddings = use_elmo_embeddings
+        self.preextracted_elmo_dir = 'models/elmo_embeddings.pickle'
 
         self.normalizers = {}
         self._index_corpus = []  # to keep track of the data point's corpus
@@ -55,6 +59,7 @@ class CorpusAggregator(_CrossValidator):
 
         self._build_corpus(corpus_list)
 
+        # IGNORE, i shouldnt be doing this
         if not self.normalize_aggregate:
             # need to normalize the word_lengths, though
             length_scaler = MinMaxScaler()
@@ -62,43 +67,72 @@ class CorpusAggregator(_CrossValidator):
                 self.sentence_word_lengths).reshape(-1, 1))
 
             self.sentence_word_lengths = np.array([
-                length_scaler.transform(np.reshape(lengths, (-1, 1))).reshape(-1)
+                length_scaler.transform(
+                    np.reshape(lengths, (-1, 1))).reshape(-1)
                 for lengths in self.sentence_word_lengths])
-
-        self.vocabulary = Vocabulary(self.sentences, filter_vocab)
 
         if self.normalize_aggregate:
             self._normalize()
 
-        self.indexed_sentences = self.vocabulary.index_sentences(
-            self.sentences)
+        # TO-DO: This has to be done per-corpus!!!
+        if self.use_elmo_embeddings:
+            try:
+                with open(self.preextracted_elmo_dir, 'rb') as f:
+                    # TO-DO: Remove np.array(),
+                    # I should already be saving a NumPy object
+                    self.indexed_sentences = pickle.load(f)
+            except FileNotFoundError:
+                print('Pre-extracted ELMo embeddings not found.',
+                      'Extracting now...')
+                elmo = ElmoEmbedder()
+                self.indexed_sentences = elmo.embed_sentences(self.sentences)
+                # self.indexed_sentences = np.array(elmo.embed_sentences(self.sentences))
+
+                # get only the last ELMo vector
+                # (can experiment with this later)
+                self.indexed_sentences = np.array([
+                    sent[2, :, :] for sent in self.indexed_sentences])
+
+                with open(self.preextracted_elmo_dir, 'wb') as f:
+                    pickle.dump(self.indexed_sentences, f)
+                print('Saved extracted ELMo embeddings to:',
+                      self.preextracted_elmo_dir)
+
+        else:
+            self.vocabulary = Vocabulary(self.sentences, filter_vocab)
+            self.indexed_sentences = self.vocabulary.index_sentences(
+                self.sentences)
+
         self.et_targets = np.array(self.et_targets)
         self.et_targets_original = np.array(self.et_targets_original)
 
     def _build_corpus(self, corpus_list):
-        print('Loading corpuses...')
+        do_normalization = True
+        # do_normalization = not self.normalize_aggregate
+        print('Aggregating corpuses...')
         for corpus in corpus_list:
             if 'ZuCo' in corpus:
-                corpus_ = ZuCo(not self.normalize_aggregate,
+                corpus_ = ZuCo(do_normalization,
                                task=corpus.split('-')[-1])
             else:
-                corpus_ = corpus_classes[corpus](not self.normalize_aggregate)
+                corpus_ = corpus_classes[corpus](do_normalization)
 
             self.sentences.extend(corpus_.sentences)
             self.sentence_word_lengths.extend(corpus_.sentence_word_lengths)
             self.et_targets.extend(corpus_.sentences_et)
             self.et_targets_original.extend(corpus_.sentences_et_original)
             self._index_corpus.extend([corpus] * len(corpus_))
-            if not self.normalize_aggregate:
-                # if not aggregately normalizing, store the corpus'
-                # respective normalizers instead
-                self.normalizers[corpus] = corpus_.normalizer
+            # if not aggregately normalizing, store the corpus'
+            # respective normalizers instead
+            self.normalizers[corpus] = corpus_.normalizer
 
+        self.sentence_word_lengths = np.array(self.sentence_word_lengths)
         self.max_seq_len = max([len(s) for s in self.sentences])
-        print('Max sentence length:', self.max_seq_len)
+        print('\nMax sentence length:', self.max_seq_len)
 
     def _normalize(self):
-        self.normalizer = StandardScaler()
+        print('Further normalizing the corpuses\' features...')
+        self.normalizer = MinMaxScaler()
 
         # ugly way to "flatten" the values into shape (N, 5) though :(
         feature_values = []
@@ -108,26 +142,37 @@ class CorpusAggregator(_CrossValidator):
 
         # a bit inefficient to do this but oh well...
         # for storing original ET features, already convert NaNs to 0
-        self.et_targets_original = np.array(
-            [np.nan_to_num(s) for s in np.copy(self.et_targets)])
+        # self.et_targets_original = np.array(
+        #     [np.nan_to_num(s) for s in np.copy(self.et_targets)])
         # for the normalized targets, normalize before converting NaNs to 0
         self.et_targets = np.array(
             [np.nan_to_num(self.normalizer.transform(s))
              for s in self.et_targets])
-        print_normalizer_stats(self, self.normalizer)
+        print_normalizer_stats('CorpusAggregator', self.normalizer)
 
     def _get_dataset(self, indices):
+        if self.use_elmo_embeddings:
+            # sentences = [self.indexed_sentences[i].reshape(-1, 1024 * 3)
+            #              for i in indices]
+            sentences = [self.indexed_sentences[i].mean(0)
+                         for i in indices]
+            # sentences = [self.indexed_sentences[i]
+            #             for i in indices]
+        else:
+            sentences = self.indexed_sentences[indices]
         return _SplitDataset(self.max_seq_len,
-                             self.indexed_sentences[indices],
+                             sentences,
                              self.et_targets[indices],
                              self.et_targets_original[indices],
                              word_lengths=(self.sentence_word_lengths[indices]
                                            if self.use_word_length else None),
-                             indices=indices)
+                             indices=indices,
+                             use_elmo_embeddings=self.use_elmo_embeddings)
 
     def inverse_transform(self, data_index, value):
         if self.normalize_aggregate:
-            return self.normalizer.inverse_transform(value)
+            # return self.normalizer.inverse_transform(value)
+            value = self.normalizer.inverse_transform(value)
 
         # find which corpus this specific data point belongs to
         # and use that corpus' normalizer to transform it back
@@ -139,7 +184,7 @@ class _SplitDataset(Dataset):
     """Send the train/test indices here and use as input to DataLoader."""
     def __init__(self, max_seq_len, indexed_sentences, targets,
                  targets_original=None, et_features=None, word_lengths=None,
-                 indices=None):
+                 indices=None, use_elmo_embeddings=False):
         self.max_seq_len = max_seq_len
         self.indexed_sentences = indexed_sentences
         self.targets = targets
@@ -147,14 +192,19 @@ class _SplitDataset(Dataset):
         self.et_features = et_features
         self.word_lengths = word_lengths
         self.aggregate_indices = indices
+        self.use_elmo_embeddings = use_elmo_embeddings
 
     def __len__(self):
         return len(self.indexed_sentences)
 
-    def __getitem__(self, i):
+    def __getitem__(self, i):  # im sorry this method like soup
         missing_dims = self.max_seq_len - len(self.indexed_sentences[i])
-        sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
-                         (0, missing_dims))
+        if self.use_elmo_embeddings:
+            sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
+                             (0, 0, 0, missing_dims))
+        else:
+            sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
+                             (0, missing_dims)).type(torch.LongTensor)
 
         if self.targets_original is not None:
             # used when predicting ET features

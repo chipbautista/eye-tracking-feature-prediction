@@ -1,4 +1,5 @@
 import re
+from pprint import pprint
 
 import numpy as np
 import pandas as pd
@@ -36,7 +37,15 @@ class Corpus:
                     _zeros = np.where(features == 0)[0]
                     features[_zeros] = np.nan
 
-                self.normalizer.fit(feature_values.T)
+                _feature_values = self.normalizer.fit_transform(feature_values.T)
+                normalized_min_max = [(np.nanmin(_feature_values[:, i]),
+                                       np.nanmax(_feature_values[:, i]),
+                                       np.nanmean(_feature_values[:, i]),
+                                       np.nanstd(_feature_values[:, i]))
+                                      for i in range(5)]
+                print('Resulting Min, Max, Mean, and STD of normalized features:')
+                pprint(normalized_min_max)
+
                 self.normalize_et()
                 print_normalizer_stats(self.name, self.normalizer)
 

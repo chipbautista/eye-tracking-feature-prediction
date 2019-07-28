@@ -1,6 +1,7 @@
 
 import torch
 from flair.embeddings import TokenEmbeddings
+from allennlp.commands.elmo import ElmoEmbedder
 
 from settings import *
 
@@ -8,24 +9,33 @@ torch.manual_seed(111)
 
 
 class EyeTrackingPredictor(torch.nn.Module):
-    def __init__(self, initial_word_embedding, out_features=5,
-                 use_word_length=False):
+    def __init__(self, initial_word_embedding=None, out_features=5,
+                 use_word_length=False, use_elmo=False):
         super(EyeTrackingPredictor, self).__init__()
-
-        word_embed_dim = WORD_EMBED_DIM
-        if use_word_length is not False:
-            word_embed_dim += 1
-
         self.out_features = out_features
-        self.word_embedding = torch.nn.Embedding.from_pretrained(
-            initial_word_embedding, freeze=False)
+
+        if use_elmo:
+            word_embed_dim = 1024
+            lstm_hidden_units = 256
+            # this is a method that just returns the input...
+            self.word_embedding = self._get_elmo_embeddings
+        else:
+            word_embed_dim = WORD_EMBED_DIM
+            lstm_hidden_units = LSTM_HIDDEN_UNITS
+            self.word_embedding = torch.nn.Embedding.from_pretrained(
+                initial_word_embedding, freeze=False)
+
+        if use_word_length is not False:
+                word_embed_dim += 1
+
+        # Define network
         self.lstm = torch.nn.LSTM(
-            input_size=word_embed_dim, hidden_size=LSTM_HIDDEN_UNITS,
+            input_size=word_embed_dim, hidden_size=lstm_hidden_units,
             num_layers=2, dropout=DROPOUT_PROB, batch_first=True,
             bidirectional=True)
         self.dropout = torch.nn.Dropout(p=DROPOUT_PROB)
         self.out = torch.nn.Linear(
-            in_features=LSTM_HIDDEN_UNITS * 2,
+            in_features=lstm_hidden_units * 2,
             out_features=self.out_features)
 
         self.use_cuda = torch.cuda.is_available()
@@ -71,6 +81,10 @@ class EyeTrackingPredictor(torch.nn.Module):
             pred[pad_start:] = 0
 
         return predictions.cpu().detach()
+
+    def _get_elmo_embeddings(self, x):
+        # hacky way to support ELMo embeddings without changing a lot of code.
+        return x
 
 
 class NLPTaskClassifier(torch.nn.Module):
@@ -153,10 +167,8 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
         - Use predictor outputs to do token.set_embedding
         - Pass the sentence through predictor
         """
-        # print(flair_sentences)
         _sentences = [[token.text for token in sentence.tokens]
                       for sentence in flair_sentences]
-        import pdb; pdb.set_trace()
         indexed_sentences = self.vocabulary.index_sentences(_sentences)
 
         for sent, flair_sent in zip(indexed_sentences, flair_sentences):
@@ -167,43 +179,17 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
 
         return flair_sentences
 
-#     # from WordEmbeddings:
-#     def _add_embeddings_internal(
-#             self, sentences: List[Sentence]) -> List[Sentence]:
 
-#         for i, sentence in enumerate(sentences):
+class ElmoEmbeddings:
+    def __init__(self, max_seq_len):
+        self.max_seq_len = max_seq_len
+        self.embedder = ElmoEmbedder(cuda_device=torch.cuda.current_device())
 
-#             for token, token_idx in zip(sentence.tokens, range(len(sentence.tokens))):
+    def get_padded_embeddings(self, sentences):
+        import pdb; pdb.set_trace()
+        embedded_sentences = self.embedder.batch_to_embeddings(sentences)
 
-#                 if "field" not in self.__dict__ or self.field is None:
-#                     word = token.text
-#                 else:
-#                     word = token.get_tag(self.field).value
 
-#                 if word in self.precomputed_word_embeddings:
-#                     word_embedding = self.precomputed_word_embeddings[word]
-#                 elif word.lower() in self.precomputed_word_embeddings:
-#                     word_embedding = self.precomputed_word_embeddings[word.lower()]
-#                 elif (
-#                     re.sub(r"\d", "#", word.lower()) in self.precomputed_word_embeddings
-#                 ):
-#                     word_embedding = self.precomputed_word_embeddings[
-#                         re.sub(r"\d", "#", word.lower())
-#                     ]
-#                 elif (
-#                     re.sub(r"\d", "0", word.lower()) in self.precomputed_word_embeddings
-#                 ):
-#                     word_embedding = self.precomputed_word_embeddings[
-#                         re.sub(r"\d", "0", word.lower())
-#                     ]
-#                 else:
-#                     word_embedding = np.zeros(self.embedding_length, dtype="float")
-
-#                 word_embedding = torch.FloatTensor(word_embedding)
-
-#                 token.set_embedding(self.name, word_embedding)
-
-#         return sentences
 
 
 def load_pretrained_et_predictor(weights_path):
@@ -213,3 +199,5 @@ def load_pretrained_et_predictor(weights_path):
     model.load_state_dict(data['model_state_dict'])
     model.eval()
     return model, data['vocabulary']
+
+

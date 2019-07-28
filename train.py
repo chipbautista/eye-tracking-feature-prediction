@@ -9,6 +9,14 @@ from model import EyeTrackingPredictor
 from settings import *
 
 
+def _get_model():
+    if args.use_elmo_embeddings != 'False':
+        return EyeTrackingPredictor(use_elmo=True)
+    else:
+        return EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
+                                    use_word_length=use_word_length)
+
+
 def iterate(dataloader):
     epoch_loss = 0.0
     # loss calculated on the real/original values (not scaled)
@@ -22,7 +30,8 @@ def iterate(dataloader):
             (sentences, et_targets, et_targets_orig, indices) = data
             word_lengths = None
 
-        sentences = sentences.type(torch.LongTensor)
+        # if not args.use_elmo_embeddings:
+        # sentences = sentences.type(torch.LongTensor)
         if USE_CUDA:
             sentences = sentences.cuda()
             et_targets = et_targets.cuda()
@@ -46,7 +55,8 @@ def iterate(dataloader):
         num_data_points = et_targets_orig[et_targets_orig > 0].shape[0]
         # mse loss divided by the actual number of data points
         # (have to disregard the padding!)
-        loss = torch.sqrt(mse_loss(et_preds, et_targets) / num_data_points)
+        # loss = torch.sqrt(mse_loss(et_preds, et_targets) / num_data_points)
+        loss = mae_loss(et_preds, et_targets) / num_data_points
 
         # calculate the loss PER FEATURE
         loss_ = torch.Tensor([mae_loss(et_preds_inverse[:, :, i],
@@ -73,11 +83,12 @@ parser.add_argument('--provo', default=False)
 parser.add_argument('--geco', default=False)
 parser.add_argument('--ucl', default=False)
 parser.add_argument('--normalize-aggregate', default='False')
-parser.add_argument('--use-word-length', default='True')
-parser.add_argument('--filter-vocab', default='False')
+parser.add_argument('--use-word-length', default='False')
+parser.add_argument('--filter-vocab', default='True')
 parser.add_argument('--save-model', default=False)
 parser.add_argument('--num-epochs', default=str(NUM_EPOCHS))
 parser.add_argument('--batch-size', default=str(BATCH_SIZE))
+parser.add_argument('--use-elmo-embeddings', default='False')
 parser.add_argument('--lr', default=str(INITIAL_LR))
 args = parser.parse_args()
 
@@ -104,7 +115,8 @@ else:
 
 dataset = CorpusAggregator(corpus_list, eval(args.normalize_aggregate),
                            filter_vocab=eval(args.filter_vocab),
-                           use_word_length=use_word_length)
+                           use_word_length=use_word_length,
+                           use_elmo_embeddings=eval(args.use_elmo_embeddings))
 mse_loss = torch.nn.MSELoss(reduction='sum')
 mae_loss = torch.nn.L1Loss(reduction='sum')
 
@@ -115,6 +127,7 @@ print('Batch Size:', eval(args.batch_size))
 print('LSTM Hidden Units:', LSTM_HIDDEN_UNITS)
 print('Number of sentences:', len(dataset))
 print('Use word length:', use_word_length)
+print('Use ELMo embeddings:', args.use_elmo_embeddings)
 print('\n--- Starting training (10-CV) ---')
 
 te_losses = []
@@ -127,8 +140,7 @@ for k, (train_loader, test_loader) in enumerate(
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
-                                 use_word_length=use_word_length)
+    model = _get_model()
     optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
     optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.1, patience=2, verbose=False)
@@ -151,10 +163,10 @@ for k, (train_loader, test_loader) in enumerate(
         e_te_losses.append(test_loss)
         e_te_losses_.append(test_loss_)
 
-        # print('k:', k, 'e:', e,
-        #       '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
-        # print(train_loss_)
-        # print(test_loss_)
+        print('k:', k, 'e:', e,
+              '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
+        print(train_loss_)
+        print(test_loss_)
 
     best_epoch = np.argmin(e_te_losses)
     best_epochs.append(best_epoch)
@@ -176,8 +188,7 @@ if args.save_model is not False:
     print('Will save final model. Will now train on all data points.')
     print('Mean number of epochs until overfit:', mean_epoch)
 
-    model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
-                                 use_word_length=use_word_length)
+    model = _get_model()
     if USE_CUDA:
         model = model.cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
