@@ -9,14 +9,19 @@ from model import EyeTrackingPredictor
 from settings import *
 
 
-def _get_model():
+def _get_model_and_optim():
     if args.use_elmo_embeddings != 'False':
-        return EyeTrackingPredictor(use_elmo=True)
+        model = EyeTrackingPredictor(use_elmo=True)
     else:
-        return EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
-                                    use_word_length=use_word_length)
+        model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
+                                     use_word_length=use_word_length)
+    return (
+        model,
+        torch.optim.Adam(model.parameters(), lr=eval(args.lr))
+    )
 
 
+# should probably move this to a Trainer class...
 def iterate(dataloader):
     epoch_loss = 0.0
     # loss calculated on the real/original values (not scaled)
@@ -88,8 +93,10 @@ parser.add_argument('--filter-vocab', default='True')
 parser.add_argument('--save-model', default=False)
 parser.add_argument('--num-epochs', default=str(NUM_EPOCHS))
 parser.add_argument('--batch-size', default=str(BATCH_SIZE))
-parser.add_argument('--use-elmo-embeddings', default='False')
 parser.add_argument('--lr', default=str(INITIAL_LR))
+parser.add_argument('--use-elmo-embeddings', default='False')
+parser.add_argument('--train-per-sample', default='False')
+parser.add_argument('--normalize-wrt-mean', default='False')
 args = parser.parse_args()
 
 print(args)
@@ -113,10 +120,13 @@ else:
     if args.ucl is not False:
         corpus_list.append('UCL')
 
-dataset = CorpusAggregator(corpus_list, eval(args.normalize_aggregate),
+dataset = CorpusAggregator(corpus_list,
+                           normalize_aggregate=eval(args.normalize_aggregate),
+                           normalize_wrt_mean=eval(args.normalize_wrt_mean),
                            filter_vocab=eval(args.filter_vocab),
                            use_word_length=use_word_length,
-                           use_elmo_embeddings=eval(args.use_elmo_embeddings))
+                           use_elmo_embeddings=eval(args.use_elmo_embeddings),
+                           train_per_sample=eval(args.train_per_sample))
 mse_loss = torch.nn.MSELoss(reduction='sum')
 mae_loss = torch.nn.L1Loss(reduction='sum')
 
@@ -124,7 +134,6 @@ print('--- PARAMETERS ---')
 print('Learning Rate:', eval(args.lr))
 print('# Epochs:', eval(args.num_epochs))
 print('Batch Size:', eval(args.batch_size))
-print('LSTM Hidden Units:', LSTM_HIDDEN_UNITS)
 print('Number of sentences:', len(dataset))
 print('Use word length:', use_word_length)
 print('Use ELMo embeddings:', args.use_elmo_embeddings)
@@ -140,8 +149,7 @@ for k, (train_loader, test_loader) in enumerate(
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    model = _get_model()
-    optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
+    model, optimizer = _get_model_and_optim()
     optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.1, patience=2, verbose=False)
 
@@ -163,10 +171,10 @@ for k, (train_loader, test_loader) in enumerate(
         e_te_losses.append(test_loss)
         e_te_losses_.append(test_loss_)
 
-        print('k:', k, 'e:', e,
-              '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
-        print(train_loss_)
-        print(test_loss_)
+        # print('k:', k, 'e:', e,
+        #       '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
+        # print(train_loss_)
+        # print(test_loss_)
 
     best_epoch = np.argmin(e_te_losses)
     best_epochs.append(best_epoch)
@@ -185,22 +193,16 @@ print(torch.stack(te_losses_).mean(0))
 
 if args.save_model is not False:
     mean_epoch = int(round(np.mean(best_epochs)))
-    print('Will save final model. Will now train on all data points.')
     print('Mean number of epochs until overfit:', mean_epoch)
+    print('Will save final model. Will now train on all data points in',
+          mean_epoch + 3, 'epochs.')
 
-    model = _get_model()
-    if USE_CUDA:
-        model = model.cuda()
-    optimizer = torch.optim.Adam(model.parameters(), lr=eval(args.lr))
-    # hacky and i love it :(
-    for train_loader, test_loader in dataset.split_cross_val(
-            num_folds=2, stratified=False):
-        for e in range(mean_epoch + 3):
-            loss_1, loss_1_ = iterate(train_loader)
-            loss_2, loss_2_ = iterate(test_loader)
-        break
+    train_loader = dataset._get_dataloader(
+        indices=np.array(range(len(dataset.sentences))))
 
-    print('Loss:', (loss_1 + loss_2) / 2, (loss_1_ + loss_2_) / 2)
+    for e in range(mean_epoch + 3):
+        loss, loss_ = iterate(train_loader)
+    print(loss, loss_)
 
     # just building the filename...
     model_datasets = ''
@@ -216,8 +218,11 @@ if args.save_model is not False:
         filename += '-UNK'
     if use_word_length:
         filename += '-WL'
+    if eval(args.use_elmo_embeddings):
+        filename += '-ELMo'
+
     torch.save({
-        'vocabulary': dataset.vocabulary,
-        'model_state_dict': model.state_dict()
+        'model_state_dict': model.state_dict(),
+        'corpus_aggregator': dataset
     }, filename)
     print('Model trained on', corpus_list, 'saved to:', filename)

@@ -42,13 +42,16 @@ class CoNLL2003(Corpus):
 class ZuCo_Task(_CrossValidator):
     def __init__(self, task='sentiment', batch_size=32, gaze_data=None,
                  et_predictor_model=None, et_predictor_vocab=None,
-                 use_predictor_vocab=False, filter_vocab=False):
+                 use_predictor_vocab=False,
+                 filter_vocab=False):
         self.batch_size = batch_size
         self.filter_vocab = False
         self.use_gaze = gaze_data is not None
 
-        _zuco = ZuCo(normalize=True, task=task)
+        _zuco = ZuCo(task=task)
         self.sentences = _zuco.sentences
+
+        # this will be overridden if we're using a trained ET predictor:
         self.sentences_et = np.array(_zuco.sentences_et)
         self.max_seq_len = max([len(s) for s in self.sentences])
 

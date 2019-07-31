@@ -15,7 +15,7 @@ from settings import BATCH_SIZE, WORD_EMBED_DIM, WORD_EMBED_MODEL_DIR
 
 
 np.random.seed(111)
-corpus_classes = {'PROVO': PROVO, 'GECO': GECO, 'UCL': UCL}
+CORPUS_CLASSES = {'PROVO': PROVO, 'GECO': GECO, 'UCL': UCL}
 
 
 class _CrossValidator:
@@ -41,14 +41,17 @@ class _CrossValidator:
 
 
 class CorpusAggregator(_CrossValidator):
-    def __init__(self, corpus_list, normalize=False, filter_vocab=False,
-                 use_word_length=False, use_elmo_embeddings=False):
+    def __init__(self, corpus_list, normalize_wrt_mean=False, filter_vocab=False,
+                 use_word_length=False, use_elmo_embeddings=False,
+                 train_per_sample=False, normalize_aggregate=False):
+
         self.batch_size = BATCH_SIZE
-        self.normalize_aggregate = normalize
+        self.normalize_aggregate = normalize_aggregate  # clean this up later...
         self.filter_vocab = filter_vocab
         self.use_word_length = use_word_length
         self.use_elmo_embeddings = use_elmo_embeddings
         self.preextracted_elmo_dir = 'models/elmo_embeddings.pickle'
+        self.train_per_sample = train_per_sample
 
         self.normalizers = {}
         self._index_corpus = []  # to keep track of the data point's corpus
@@ -57,9 +60,10 @@ class CorpusAggregator(_CrossValidator):
         self.et_targets = []
         self.et_targets_original = []
 
-        self._build_corpus(corpus_list)
+        self._build_corpus(corpus_list, normalize_wrt_mean)
 
-        # IGNORE, i shouldnt be doing this
+        # IGNORE, i won't be using word lengths in this experiment
+        """
         if not self.normalize_aggregate:
             # need to normalize the word_lengths, though
             length_scaler = MinMaxScaler()
@@ -70,9 +74,13 @@ class CorpusAggregator(_CrossValidator):
                 length_scaler.transform(
                     np.reshape(lengths, (-1, 1))).reshape(-1)
                 for lengths in self.sentence_word_lengths])
+        """
 
         if self.normalize_aggregate:
-            self._normalize()
+            self.normalizer = MinMaxScaler()
+            self._scale_minmax()
+        else:
+            self.normalizer = None
 
         # TO-DO: This has to be done per-corpus!!!
         if self.use_elmo_embeddings:
@@ -88,11 +96,6 @@ class CorpusAggregator(_CrossValidator):
                 self.indexed_sentences = elmo.embed_sentences(self.sentences)
                 # self.indexed_sentences = np.array(elmo.embed_sentences(self.sentences))
 
-                # get only the last ELMo vector
-                # (can experiment with this later)
-                self.indexed_sentences = np.array([
-                    sent[2, :, :] for sent in self.indexed_sentences])
-
                 with open(self.preextracted_elmo_dir, 'wb') as f:
                     pickle.dump(self.indexed_sentences, f)
                 print('Saved extracted ELMo embeddings to:',
@@ -106,33 +109,34 @@ class CorpusAggregator(_CrossValidator):
         self.et_targets = np.array(self.et_targets)
         self.et_targets_original = np.array(self.et_targets_original)
 
-    def _build_corpus(self, corpus_list):
-        do_normalization = True
+    def _build_corpus(self, corpus_list, normalize_wrt_mean):
         # do_normalization = not self.normalize_aggregate
         print('Aggregating corpuses...')
+        print('Normalize with respect to mean features:', normalize_wrt_mean)
         for corpus in corpus_list:
+            kwargs = {
+                'normalize_wrt_mean': normalize_wrt_mean,
+                'aggregate_features': not self.train_per_sample,
+                'use_elmo_embeddings': self.use_elmo_embeddings
+            }
             if 'ZuCo' in corpus:
-                corpus_ = ZuCo(do_normalization,
-                               task=corpus.split('-')[-1])
+                corpus_ = ZuCo(corpus.split('-')[-1], kwargs)
             else:
-                corpus_ = corpus_classes[corpus](do_normalization)
+                corpus_ = CORPUS_CLASSES[corpus](kwargs)
 
             self.sentences.extend(corpus_.sentences)
             self.sentence_word_lengths.extend(corpus_.sentence_word_lengths)
             self.et_targets.extend(corpus_.sentences_et)
             self.et_targets_original.extend(corpus_.sentences_et_original)
             self._index_corpus.extend([corpus] * len(corpus_))
-            # if not aggregately normalizing, store the corpus'
-            # respective normalizers instead
             self.normalizers[corpus] = corpus_.normalizer
 
         self.sentence_word_lengths = np.array(self.sentence_word_lengths)
         self.max_seq_len = max([len(s) for s in self.sentences])
         print('\nMax sentence length:', self.max_seq_len)
 
-    def _normalize(self):
+    def _scale_minmax(self):
         print('Further normalizing the corpuses\' features...')
-        self.normalizer = MinMaxScaler()
 
         # ugly way to "flatten" the values into shape (N, 5) though :(
         feature_values = []
@@ -140,14 +144,8 @@ class CorpusAggregator(_CrossValidator):
             feature_values.extend(sent_et)
         self.normalizer.fit(np.array(feature_values))
 
-        # a bit inefficient to do this but oh well...
-        # for storing original ET features, already convert NaNs to 0
-        # self.et_targets_original = np.array(
-        #     [np.nan_to_num(s) for s in np.copy(self.et_targets)])
-        # for the normalized targets, normalize before converting NaNs to 0
-        self.et_targets = np.array(
-            [np.nan_to_num(self.normalizer.transform(s))
-             for s in self.et_targets])
+        self.et_targets = np.array([self.normalizer.transform(s)
+                                    for s in self.et_targets])
         print_normalizer_stats('CorpusAggregator', self.normalizer)
 
     def _get_dataset(self, indices):
@@ -171,7 +169,6 @@ class CorpusAggregator(_CrossValidator):
 
     def inverse_transform(self, data_index, value):
         if self.normalize_aggregate:
-            # return self.normalizer.inverse_transform(value)
             value = self.normalizer.inverse_transform(value)
 
         # find which corpus this specific data point belongs to

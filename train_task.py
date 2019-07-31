@@ -75,7 +75,8 @@ args = parser.parse_args()
 
 
 if str(args.gaze_data).lower() not in ['own', 'false']:
-    et_predictor, vocab = load_pretrained_et_predictor(str(args.gaze_data))
+    et_predictor, vocab, aggregator = load_pretrained_et_predictor(
+        str(args.gaze_data))
 else:
     et_predictor, vocab = None, None
 
@@ -83,6 +84,7 @@ if 'zuco' in args.dataset:
     dataset = ZuCo_Task(args.dataset.split('-')[-1], int(args.batch_size),
                         args.gaze_data, et_predictor, vocab,
                         use_predictor_vocab=args.use_predictor_vocab != 'False')
+
     lstm_units = 150
     do_cross_validation = True
 elif args.dataset == 'imdb':

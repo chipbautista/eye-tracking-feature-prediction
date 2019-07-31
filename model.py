@@ -1,7 +1,6 @@
 
 import torch
 from flair.embeddings import TokenEmbeddings
-from allennlp.commands.elmo import ElmoEmbedder
 
 from settings import *
 
@@ -10,34 +9,45 @@ torch.manual_seed(111)
 
 class EyeTrackingPredictor(torch.nn.Module):
     def __init__(self, initial_word_embedding=None, out_features=5,
-                 use_word_length=False, use_elmo=False):
+                 use_word_length=False, use_elmo=False,
+                 lstm_hidden_units=LSTM_HIDDEN_UNITS,
+                 _prediction_inverse_transformer=None):
         super(EyeTrackingPredictor, self).__init__()
+        ### FOR TESTING ###
+        self._prediction_inverse_transformer = _prediction_inverse_transformer
+
         self.out_features = out_features
 
+        # Variable Housekeeping first...
+        lstm_layers = 2
         if use_elmo:
             word_embed_dim = 1024
-            lstm_hidden_units = 256
+            self.lstm_hidden_units = 256
             # this is a method that just returns the input...
-            self.word_embedding = self._get_elmo_embeddings
+            self.word_embedding = self._pass
         else:
             word_embed_dim = WORD_EMBED_DIM
-            lstm_hidden_units = LSTM_HIDDEN_UNITS
+            self.lstm_hidden_units = lstm_hidden_units
             self.word_embedding = torch.nn.Embedding.from_pretrained(
                 initial_word_embedding, freeze=False)
+
+        print('\nInitialize ET Predictor: lstm_hidden_units =',
+              self.lstm_hidden_units, 'lstm_layers =', lstm_layers)
 
         if use_word_length is not False:
                 word_embed_dim += 1
 
-        # Define network
+        # Define Network
         self.lstm = torch.nn.LSTM(
-            input_size=word_embed_dim, hidden_size=lstm_hidden_units,
-            num_layers=2, dropout=DROPOUT_PROB, batch_first=True,
+            input_size=word_embed_dim, hidden_size=self.lstm_hidden_units,
+            num_layers=lstm_layers, dropout=DROPOUT_PROB, batch_first=True,
             bidirectional=True)
         self.dropout = torch.nn.Dropout(p=DROPOUT_PROB)
         self.out = torch.nn.Linear(
-            in_features=lstm_hidden_units * 2,
+            in_features=self.lstm_hidden_units * 2,
             out_features=self.out_features)
 
+        # more housekeeping
         self.use_cuda = torch.cuda.is_available()
         if self.use_cuda:
             self.cuda()
@@ -48,21 +58,22 @@ class EyeTrackingPredictor(torch.nn.Module):
             if word_lengths is not None:
                 word_lengths = word_lengths.cuda()
 
-        _batch_size = x.shape[0]
         word_embeddings = self.word_embedding(x)
 
-        if word_lengths is not None:
-            word_embeddings = torch.cat(
-                (word_embeddings, word_lengths.reshape(_batch_size, -1, 1)),
-                dim=2)
+        # if word_lengths is not None:
+        #     word_embeddings = torch.cat(
+        #         (word_embeddings, word_lengths.reshape(_batch_size, -1, 1)),
+        #         dim=2)
 
+        # Actual forward pass:
         lstm_out, (h_n, c_n) = self.lstm(word_embeddings)
         lstm_out = self.dropout(lstm_out)
-        et_pred = self.out(lstm_out.reshape(-1, LSTM_HIDDEN_UNITS * 2))
+        et_pred = self.out(lstm_out.reshape(-1, self.lstm_hidden_units * 2))
+        # et_pred = self._out(et_pred)
         return et_pred.reshape(x.shape[0], -1, self.out_features)
 
     def sentences_to_et(self, indexed_sentences, max_seq_len):
-        """for downstream use"""
+        """for downstream use, should be called when training NLP tasks"""
         pad_start_indices = []
         padded_indices = []
 
@@ -74,15 +85,22 @@ class EyeTrackingPredictor(torch.nn.Module):
                 torch.nn.functional.pad(torch.Tensor(sent),
                                         (0, missing_dims)))
 
-        predictions = self.forward(torch.stack(padded_indices).long())
+        predictions = self.forward(torch.stack(padded_indices).long()).cpu().detach()
+        # if the model was trained using MinMaxed data (by CorpusAggregator),
+        # bring the predictions back to StandardScale
+        # this seems to make predictions better because it makes the signals
+        # bigger (from 2 decimals to 1 decimal or ~3)
+        if self._prediction_inverse_transformer:
+            predictions = torch.Tensor([self._prediction_inverse_transformer.inverse_transform(
+                pred) for pred in predictions])
 
         # revert paddings to 0
         for pred, pad_start in zip(predictions, pad_start_indices):
             pred[pad_start:] = 0
 
-        return predictions.cpu().detach()
+        return predictions
 
-    def _get_elmo_embeddings(self, x):
+    def _pass(self, x):
         # hacky way to support ELMo embeddings without changing a lot of code.
         return x
 
@@ -92,6 +110,7 @@ class NLPTaskClassifier(torch.nn.Module):
                  max_seq_len, num_classes, use_gaze):
         super(NLPTaskClassifier, self).__init__()
 
+        # Housekeeping
         self.use_gaze = use_gaze
         if self.use_gaze:
             et_feature_dim = len(ET_FEATURES)
@@ -99,6 +118,7 @@ class NLPTaskClassifier(torch.nn.Module):
             et_feature_dim = 0
         self.max_sentence_length = max_seq_len
 
+        # Network
         self.word_embedding = torch.nn.Embedding.from_pretrained(
             initial_word_embedding, freeze=False)
         self.lstm = torch.nn.LSTM(input_size=WORD_EMBED_DIM + et_feature_dim,
@@ -113,6 +133,7 @@ class NLPTaskClassifier(torch.nn.Module):
                                          out_features=50)
         self.out = torch.nn.Linear(in_features=50,
                                    out_features=num_classes)
+
         self.use_cuda = torch.cuda.is_available()
         if self.use_cuda:
             self.cuda()
@@ -131,6 +152,7 @@ class NLPTaskClassifier(torch.nn.Module):
         else:
             x = word_embeddings
 
+        # Actual forward pass:
         lstm_out, (h_n, c_n) = self.lstm(x)
         lstm_out = self.dropout(lstm_out)
 
@@ -147,10 +169,16 @@ class NLPTaskClassifier(torch.nn.Module):
 
 
 class EyeTrackingFeatureEmbedding(TokenEmbeddings):
+    """
+    A class adhering to Flair Embeddings.
+
+    Used for training tasks already available in Flair, to add
+    eye-tracking features to the tokens. See `train_flair.py`
+    """
     def __init__(self, model_path):
         super().__init__()
         self.name = 'et_features'
-        self.et_predictor, self.vocabulary = load_pretrained_et_predictor(
+        self.et_predictor, self.vocabulary, agg = load_pretrained_et_predictor(
             model_path)
         self.et_predictor.cuda()
         # - Instantiate EyeTrackingPredictor with weights
@@ -180,24 +208,25 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
         return flair_sentences
 
 
-class ElmoEmbeddings:
-    def __init__(self, max_seq_len):
-        self.max_seq_len = max_seq_len
-        self.embedder = ElmoEmbedder(cuda_device=torch.cuda.current_device())
-
-    def get_padded_embeddings(self, sentences):
-        import pdb; pdb.set_trace()
-        embedded_sentences = self.embedder.batch_to_embeddings(sentences)
-
-
-
-
 def load_pretrained_et_predictor(weights_path):
     data = torch.load(weights_path)
+    if 'corpus_aggregator' in data:
+        aggregator = data['corpus_aggregator']
+        vocab = aggregator.vocabulary
+
+    else:
+        aggregator = None
+        vocab = data['vocabulary']
+
     model = EyeTrackingPredictor(
-        torch.zeros((len(data['vocabulary']), WORD_EMBED_DIM)))
+        initial_word_embedding=torch.zeros((len(vocab), WORD_EMBED_DIM)),
+        lstm_hidden_units=int(
+            data['model_state_dict']['lstm.weight_ih_l0'].shape[0] / 4),
+        ### FOR TESTING ###
+        _prediction_inverse_transformer=aggregator.normalizer
+    )
+
     model.load_state_dict(data['model_state_dict'])
     model.eval()
-    return model, data['vocabulary']
 
-
+    return model, vocab, aggregator

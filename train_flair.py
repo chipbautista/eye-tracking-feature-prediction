@@ -12,7 +12,7 @@ from settings import TASK_DATASET_DIR
 
 
 parser = ArgumentParser()
-parser.add_argument('--model-path', default=None)
+parser.add_argument('--model-path', default='NA')
 parser.add_argument('--use-flair-embeddings', default=False)
 parser.add_argument('--task', default='ner')
 args = parser.parse_args()
@@ -28,6 +28,8 @@ else:
     tag_type = 'np'
     embedding_types = [WordEmbeddings('extvec')]
 
+_base_path = 'resources/taggers/{}-{}'.format(args.task, args.model_path)
+
 if args.use_flair_embeddings is True:
     embedding_types.extend([
         # contextual string embeddings, forward
@@ -36,7 +38,7 @@ if args.use_flair_embeddings is True:
         PooledFlairEmbeddings('news-backward')
     ])
 
-if args.model_path:
+if args.model_path != 'NA':
     embedding_types.append(
         EyeTrackingFeatureEmbedding(args.model_path))
 
@@ -51,10 +53,11 @@ tagger = SequenceTagger(hidden_size=256,
                         tag_type=tag_type)
 
 trainer = ModelTrainer(tagger, corpus)
-trainer.train('resources/taggers/example-ner',
-              max_epochs=100,
+trainer.train(_base_path,
+              # max_epochs=100,
               learning_rate=0.1,  # default
               # min_learning_rate=0.001,  # default = 0.0001
               save_final_model=False,
-              mini_batch_size=64  # default = 32
+              mini_batch_size=64,  # default = 32
+              embeddings_storage_mode='gpu'
               )
