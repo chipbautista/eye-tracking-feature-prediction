@@ -59,5 +59,5 @@ trainer.train(_base_path,
               # min_learning_rate=0.001,  # default = 0.0001
               save_final_model=False,
               mini_batch_size=64,  # default = 32
-              embeddings_storage_mode='gpu'
+              # embeddings_storage_mode='gpu'
               )

@@ -8,7 +8,8 @@ from gensim.models import KeyedVectors
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset
-from allennlp.commands.elmo import ElmoEmbedder
+# from allennlp.commands.elmo import ElmoEmbedder
+from allennlp.modules.elmo import batch_to_ids
 
 from datasets_corpus import *
 from settings import BATCH_SIZE, WORD_EMBED_DIM, WORD_EMBED_MODEL_DIR
@@ -42,14 +43,14 @@ class _CrossValidator:
 
 class CorpusAggregator(_CrossValidator):
     def __init__(self, corpus_list, normalize_wrt_mean=False, filter_vocab=False,
-                 use_word_length=False, use_elmo_embeddings=False,
+                 use_word_length=False, use_elmo=False,
                  train_per_sample=False, normalize_aggregate=False):
 
         self.batch_size = BATCH_SIZE
         self.normalize_aggregate = normalize_aggregate  # clean this up later...
         self.filter_vocab = filter_vocab
         self.use_word_length = use_word_length
-        self.use_elmo_embeddings = use_elmo_embeddings
+        self.use_elmo = use_elmo
         self.preextracted_elmo_dir = 'models/elmo_embeddings.pickle'
         self.train_per_sample = train_per_sample
 
@@ -83,7 +84,8 @@ class CorpusAggregator(_CrossValidator):
             self.normalizer = None
 
         # TO-DO: This has to be done per-corpus!!!
-        if self.use_elmo_embeddings:
+        """
+        if self.use_elmo:
             try:
                 with open(self.preextracted_elmo_dir, 'rb') as f:
                     # TO-DO: Remove np.array(),
@@ -102,9 +104,11 @@ class CorpusAggregator(_CrossValidator):
                       self.preextracted_elmo_dir)
 
         else:
-            self.vocabulary = Vocabulary(self.sentences, filter_vocab)
-            self.indexed_sentences = self.vocabulary.index_sentences(
-                self.sentences)
+        """
+        self.vocabulary = Vocabulary(self.sentences, filter_vocab,
+                                     self.use_elmo)
+        self.indexed_sentences = self.vocabulary.index_sentences(
+            self.sentences)
 
         self.et_targets = np.array(self.et_targets)
         self.et_targets_original = np.array(self.et_targets_original)
@@ -117,7 +121,7 @@ class CorpusAggregator(_CrossValidator):
             kwargs = {
                 'normalize_wrt_mean': normalize_wrt_mean,
                 'aggregate_features': not self.train_per_sample,
-                'use_elmo_embeddings': self.use_elmo_embeddings
+                'use_elmo_embeddings': self.use_elmo
             }
             if 'ZuCo' in corpus:
                 corpus_ = ZuCo(corpus.split('-')[-1], kwargs)
@@ -149,7 +153,8 @@ class CorpusAggregator(_CrossValidator):
         print_normalizer_stats('CorpusAggregator', self.normalizer)
 
     def _get_dataset(self, indices):
-        if self.use_elmo_embeddings:
+        """
+        if self.use_elmo:
             # sentences = [self.indexed_sentences[i].reshape(-1, 1024 * 3)
             #              for i in indices]
             sentences = [self.indexed_sentences[i].mean(0)
@@ -158,14 +163,15 @@ class CorpusAggregator(_CrossValidator):
             #             for i in indices]
         else:
             sentences = self.indexed_sentences[indices]
+        """
         return _SplitDataset(self.max_seq_len,
-                             sentences,
+                             self.indexed_sentences[indices],
                              self.et_targets[indices],
                              self.et_targets_original[indices],
                              word_lengths=(self.sentence_word_lengths[indices]
                                            if self.use_word_length else None),
                              indices=indices,
-                             use_elmo_embeddings=self.use_elmo_embeddings)
+                             use_elmo_embeddings=self.use_elmo)
 
     def inverse_transform(self, data_index, value):
         if self.normalize_aggregate:
@@ -196,6 +202,7 @@ class _SplitDataset(Dataset):
 
     def __getitem__(self, i):  # im sorry this method like soup
         missing_dims = self.max_seq_len - len(self.indexed_sentences[i])
+        import pdb; pdb.set_trace()
         if self.use_elmo_embeddings:
             sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
                              (0, 0, 0, missing_dims))
@@ -235,15 +242,24 @@ class _SplitDataset(Dataset):
 
 
 class Vocabulary:
-    def __init__(self, sentences, filter_vocab=False):
+    def __init__(self, sentences, filter_vocab=False, use_elmo=False):
         print('\nInitializing new Vocabulary object...')
         self.filter_vocab = filter_vocab
+        self.use_elmo = use_elmo
         vocab, self.word_embeddings = self._init_word_embedding_from_word2vec(
             sentences)
         self.vocabulary = dict(zip(vocab, range(len(vocab))))
         print('Num of words in vocabulary:', len(self.vocabulary))
 
     def index_sentences(self, sentences):
+        try:
+            if self.use_elmo:
+                return batch_to_ids(sentences)
+        except AttributeError:
+            # happens when we're loading the Vocab object from file and it
+            # does not have use_elmo attribute
+            pass
+
         return np.array([
             [self.get_index(w) for w in sentence]
             for sentence in sentences

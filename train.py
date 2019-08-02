@@ -10,7 +10,7 @@ from settings import *
 
 
 def _get_model_and_optim():
-    if args.use_elmo_embeddings != 'False':
+    if args.use_elmo != 'False':
         model = EyeTrackingPredictor(use_elmo=True)
     else:
         model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
@@ -94,7 +94,7 @@ parser.add_argument('--save-model', default=False)
 parser.add_argument('--num-epochs', default=str(NUM_EPOCHS))
 parser.add_argument('--batch-size', default=str(BATCH_SIZE))
 parser.add_argument('--lr', default=str(INITIAL_LR))
-parser.add_argument('--use-elmo-embeddings', default='False')
+parser.add_argument('--use-elmo', default='False')
 parser.add_argument('--train-per-sample', default='False')
 parser.add_argument('--normalize-wrt-mean', default='False')
 args = parser.parse_args()
@@ -125,7 +125,7 @@ dataset = CorpusAggregator(corpus_list,
                            normalize_wrt_mean=eval(args.normalize_wrt_mean),
                            filter_vocab=eval(args.filter_vocab),
                            use_word_length=use_word_length,
-                           use_elmo_embeddings=eval(args.use_elmo_embeddings),
+                           use_elmo=eval(args.use_elmo),
                            train_per_sample=eval(args.train_per_sample))
 mse_loss = torch.nn.MSELoss(reduction='sum')
 mae_loss = torch.nn.L1Loss(reduction='sum')
@@ -136,7 +136,7 @@ print('# Epochs:', eval(args.num_epochs))
 print('Batch Size:', eval(args.batch_size))
 print('Number of sentences:', len(dataset))
 print('Use word length:', use_word_length)
-print('Use ELMo embeddings:', args.use_elmo_embeddings)
+print('Use ELMo embeddings:', args.use_elmo)
 print('\n--- Starting training (10-CV) ---')
 
 te_losses = []

@@ -34,7 +34,7 @@ class Corpus(Dataset):
         # will be created by `normalize_et`
         self.sentences_et_original = []
 
-        self.normalizer = MinMaxScaler()
+        self.normalizer = StandardScaler()
 
         print('\n===== Initializing', self.name, '=====')
         feature_values = self.load_corpus()

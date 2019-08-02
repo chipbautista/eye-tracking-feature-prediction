@@ -1,10 +1,13 @@
 
 import torch
 from flair.embeddings import TokenEmbeddings
+from allennlp.modules.elmo import Elmo
 
 from settings import *
 
 torch.manual_seed(111)
+ELMO_OPTIONS_URL = "https://allennlp.s3.amazonaws.com/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_options.json"
+ELMO_WEIGHT_URL = "https://allennlp.s3.amazonaws.com/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_weights.hdf5"
 
 
 class EyeTrackingPredictor(torch.nn.Module):
@@ -22,9 +25,14 @@ class EyeTrackingPredictor(torch.nn.Module):
         lstm_layers = 2
         if use_elmo:
             word_embed_dim = 1024
+            """ FOR WHEN USING PRE-TRAINED EMBEDDINGS
             self.lstm_hidden_units = 256
             # this is a method that just returns the input...
             self.word_embedding = self._pass
+            """
+            self.lstm_hidden_units = 256
+            self.word_embedding = Elmo(ELMO_OPTIONS_URL, ELMO_WEIGHT_URL,
+                                       1, dropout=0.5, requires_grad=True)
         else:
             word_embed_dim = WORD_EMBED_DIM
             self.lstm_hidden_units = lstm_hidden_units
@@ -201,7 +209,13 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
 
         for sent, flair_sent in zip(indexed_sentences, flair_sentences):
             et_features = self.et_predictor(
-                torch.Tensor([sent]).long().cuda()).detach().cpu()
+                torch.Tensor([sent]).long().cuda()).detach().cpu()[0]
+
+            if self.et_predictor._prediction_inverse_transformer:
+                et_features = torch.Tensor([
+                    self.et_predictor._prediction_inverse_transformer.inverse_transform(
+                        et_features)])
+
             for et_feat, token in zip(et_features[0], flair_sent.tokens):
                 token.set_embedding('ET_feature', et_feat)
 
