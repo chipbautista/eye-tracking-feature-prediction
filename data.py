@@ -10,6 +10,7 @@ from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset
 # from allennlp.commands.elmo import ElmoEmbedder
 from allennlp.modules.elmo import batch_to_ids
+from flair.data import Sentence
 
 from datasets_corpus import *
 from model import STATIC_EMBEDDING
@@ -75,7 +76,10 @@ class CorpusAggregator(_CrossValidator):
             # Flair's ELMoEmbedding and BERTEmbedding
             # directly converts tokens into embeddings.
             # No need to manually convert them to indices
-            self.indexed_sentences = np.array(self.sentences)
+            embed_class, embed_model, _ = STATIC_EMBEDDING[static_embedding]
+            embedding = embed_class(embed_model)
+            self.indexed_sentences = embedding.embed(
+                [Sentence(sent) for sent in self.sentences])
         else:
             self.vocabulary = Vocabulary(self.sentences, filter_vocab,
                                          self.finetune_elmo)
@@ -161,13 +165,6 @@ class _SplitDataset(Dataset):
                  indices=None, finetune_elmo=False, static_embedding=None):
 
         self.static_embedding = static_embedding
-        import pdb; pdb.set_trace()
-        if self.static_embedding:
-            embed_class, embed_model, _ = STATIC_EMBEDDING[static_embedding]
-            embedding = embed_class(embed_model)
-            import pdb; pdb.set_trace()
-            self.indexed_sentences = embedding.embed(sentences)
-
         self.max_seq_len = max_seq_len
         self.indexed_sentences = indexed_sentences
         self.targets = targets
