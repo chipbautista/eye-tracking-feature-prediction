@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 
 class Corpus(Dataset):
     def __init__(self, normalize_wrt_mean=True, aggregate_features=True,
-                 use_elmo_embeddings=False):
+                 finetune_elmo=False):
         """
         - normalize_wrt_mean : if True, run StandardScaler over the averaged
         ET feature values, not the raw ones!!
@@ -22,7 +22,9 @@ class Corpus(Dataset):
         """
         self.aggregate_features = aggregate_features
         self.normalize_wrt_mean = normalize_wrt_mean
-        self.use_elmo_embeddings = use_elmo_embeddings
+        self.finetune_elmo = finetune_elmo
+
+        # used for storing pre-extracted ELMo embeddings for the sentences
         self.elmo_embeddings_dir = 'elmo/{}.pickle'.format(
             self.name)
 
@@ -50,26 +52,10 @@ class Corpus(Dataset):
             self.normalize_et()
             self._save_to_file()
 
-        """
-        if feature_values:
-            if self.normalizer:
-                # this part is just for printing stuff...
-                _feature_values = self.normalizer.fit_transform(feature_values.T)
-                normalized_min_max = [(np.nanmin(_feature_values[:, i]),
-                                       np.nanmax(_feature_values[:, i]),
-                                       np.nanmean(_feature_values[:, i]),
-                                       np.nanstd(_feature_values[:, i]))
-                                      for i in range(5)]
-                print('Resulting Min, Max, Mean, and STD of normalized features:')
-                pprint(normalized_min_max)
-
-                self.normalize_et()
-                print_normalizer_stats(self.name, self.normalizer)
-            """
 
         # ELMO/ALLENNLP IS BROKEN!
         """
-        if use_elmo_embeddings:
+        if finetune_elmo:
             try:
                 with open(self.elmo_embeddings_dir, 'rb') as f:
                     self.indexed_sentences = pickle.load(f)
@@ -160,8 +146,6 @@ class Corpus(Dataset):
 
 
 class ZuCo(Corpus):
-    # def __init__(self, normalize_wrt_mean=True, task='sentiment',
-    #              aggregate_features=True, use_elmo_embeddings=False):
     def __init__(self, task='sentiment', kwargs={}):
         self.name = '-'.join(['ZuCo', task])
 

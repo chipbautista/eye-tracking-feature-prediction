@@ -10,11 +10,14 @@ from settings import *
 
 
 def _get_model_and_optim():
-    if args.use_elmo != 'False':
-        model = EyeTrackingPredictor(use_elmo=True)
+    if args.finetune_elmo != 'False' or args.static_embedding:
+        model = EyeTrackingPredictor(
+            finetune_elmo=eval(args.finetune_elmo),
+            static_embedding=args.static_embedding)
     else:
-        model = EyeTrackingPredictor(dataset.vocabulary.word_embeddings.clone(),
-                                     use_word_length=use_word_length)
+        model = EyeTrackingPredictor(
+            dataset.vocabulary.word_embeddings.clone())
+
     return (
         model,
         torch.optim.Adam(model.parameters(), lr=eval(args.lr))
@@ -26,22 +29,16 @@ def iterate(dataloader):
     epoch_loss = 0.0
     # loss calculated on the real/original values (not scaled)
     epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
-    for i, data in enumerate(dataloader):
+    for i, (sentences, et_targets,
+            et_targets_orig, indices) in enumerate(dataloader):
 
-        if use_word_length:
-            (sentences, et_targets, et_targets_orig,
-                word_lengths, indices) = data
-        else:
-            (sentences, et_targets, et_targets_orig, indices) = data
-            word_lengths = None
-
-        # if not args.use_elmo_embeddings:
+        # if not args.finetune_elmo_embeddings:
         # sentences = sentences.type(torch.LongTensor)
         if USE_CUDA:
             sentences = sentences.cuda()
             et_targets = et_targets.cuda()
 
-        et_preds = model(sentences, word_lengths)
+        et_preds = model(sentences)
 
         et_preds_inverse = torch.Tensor([
             dataset.inverse_transform(idx, value)
@@ -81,27 +78,33 @@ def iterate(dataloader):
 
 
 parser = ArgumentParser()
+# Data Sets
 parser.add_argument('--zuco-1', default=False)
 parser.add_argument('--zuco-2', default=False)
 parser.add_argument('--zuco-3', default=False)
 parser.add_argument('--provo', default=False)
 parser.add_argument('--geco', default=False)
 parser.add_argument('--ucl', default=False)
-parser.add_argument('--normalize-aggregate', default='False')
+# Data Set Preparation
+parser.add_argument('--minmax-aggregate', default='False')
 parser.add_argument('--use-word-length', default='False')
 parser.add_argument('--filter-vocab', default='True')
+parser.add_argument('--normalize-wrt-mean', default='False')
+parser.add_argument('--train-per-sample', default='False')
+# Predictor Settings
+parser.add_argument('--static-embedding', default='')
+parser.add_argument('--finetune-elmo', default='False',
+                    help='Finetune pre-trained ELMo instead of word2vec')
+# Training Settings
 parser.add_argument('--save-model', default=False)
 parser.add_argument('--num-epochs', default=str(NUM_EPOCHS))
 parser.add_argument('--batch-size', default=str(BATCH_SIZE))
 parser.add_argument('--lr', default=str(INITIAL_LR))
-parser.add_argument('--use-elmo', default='False')
-parser.add_argument('--train-per-sample', default='False')
-parser.add_argument('--normalize-wrt-mean', default='False')
-args = parser.parse_args()
 
+
+args = parser.parse_args()
 print(args)
 
-use_word_length = eval(args.use_word_length)
 if (args.zuco_1 is False and args.zuco_2 is False and args.zuco_3 is False and
         args.provo is False and args.geco is False and args.ucl is False):
     corpus_list = ['ZuCo-1', 'ZuCo-2', 'ZuCo-3', 'PROVO', 'GECO', 'UCL']
@@ -121,12 +124,12 @@ else:
         corpus_list.append('UCL')
 
 dataset = CorpusAggregator(corpus_list,
-                           normalize_aggregate=eval(args.normalize_aggregate),
+                           minmax_aggregate=eval(args.minmax_aggregate),
                            normalize_wrt_mean=eval(args.normalize_wrt_mean),
                            filter_vocab=eval(args.filter_vocab),
-                           use_word_length=use_word_length,
-                           use_elmo=eval(args.use_elmo),
-                           train_per_sample=eval(args.train_per_sample))
+                           finetune_elmo=eval(args.finetune_elmo),
+                           train_per_sample=eval(args.train_per_sample),
+                           static_embedding=args.static_embedding)
 mse_loss = torch.nn.MSELoss(reduction='sum')
 mae_loss = torch.nn.L1Loss(reduction='sum')
 
@@ -135,8 +138,8 @@ print('Learning Rate:', eval(args.lr))
 print('# Epochs:', eval(args.num_epochs))
 print('Batch Size:', eval(args.batch_size))
 print('Number of sentences:', len(dataset))
-print('Use word length:', use_word_length)
-print('Use ELMo embeddings:', args.use_elmo)
+print('Finetune ELMo embeddings:', args.finetune_elmo)
+print('Static embeddings:', args.static_embedding)
 print('\n--- Starting training (10-CV) ---')
 
 te_losses = []
@@ -216,9 +219,7 @@ if args.save_model is not False:
     filename = TRAINED_ET_MODEL_DIR.format(model_datasets)
     if eval(args.filter_vocab):
         filename += '-UNK'
-    if use_word_length:
-        filename += '-WL'
-    if eval(args.use_elmo_embeddings):
+    if eval(args.finetune_elmo_embeddings):
         filename += '-ELMo'
 
     torch.save({
