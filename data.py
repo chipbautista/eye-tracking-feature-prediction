@@ -74,14 +74,6 @@ class CorpusAggregator(_CrossValidator):
 
         if self.static_embedding:
             self.indexed_sentences = np.array(self.sentences)
-            pass
-            # Flair's ELMoEmbedding and BERTEmbedding
-            # directly converts tokens into embeddings.
-            # No need to manually convert them to indices
-            # embed_class, embed_model, _ = STATIC_EMBEDDING[static_embedding]
-            # embedding = embed_class(embed_model)
-            # self.indexed_sentences = embedding.embed(
-            #     [Sentence(sent) for sent in self.sentences])
         else:
             self.vocabulary = Vocabulary(self.sentences, filter_vocab,
                                          self.finetune_elmo)

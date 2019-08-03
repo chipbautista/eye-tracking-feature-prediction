@@ -48,7 +48,6 @@ class Corpus(Dataset):
             self.normalize_et()
             self._save_to_file()
 
-        import pdb; pdb.set_trace()
         # DO NOT RUN THIS USING PC AT HOME!
         if static_embedding:
             static_embedding_dir = '../data/_static_embeddings/{}-{}.pickle'.format(

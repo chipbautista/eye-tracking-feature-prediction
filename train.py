@@ -87,7 +87,6 @@ parser.add_argument('--geco', default=False)
 parser.add_argument('--ucl', default=False)
 # Data Set Preparation
 parser.add_argument('--minmax-aggregate', default='False')
-parser.add_argument('--use-word-length', default='False')
 parser.add_argument('--filter-vocab', default='True')
 parser.add_argument('--normalize-wrt-mean', default='False')
 parser.add_argument('--train-per-sample', default='False')
@@ -219,8 +218,12 @@ if args.save_model is not False:
     filename = TRAINED_ET_MODEL_DIR.format(model_datasets)
     if eval(args.filter_vocab):
         filename += '-UNK'
-    if eval(args.finetune_elmo_embeddings):
-        filename += '-ELMo'
+    # if eval(args.finetune_elmo_embeddings):
+    #     filename += '-ELMo'
+    if eval(args.train_per_sample):
+        filename += 'persample'
+    if args.static_embedding:
+        filename += '-' + args.static_embedding
 
     torch.save({
         'model_state_dict': model.state_dict(),

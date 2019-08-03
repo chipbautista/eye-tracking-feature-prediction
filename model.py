@@ -25,7 +25,13 @@ class EyeTrackingPredictor(torch.nn.Module):
         lstm_layers = 2
 
         ### FOR TESTING ###
-        self._prediction_inverse_transformer = _prediction_inverse_transformer
+        print('Initializing ET Predictor')
+        # self._prediction_inverse_transformer = _prediction_inverse_transformer
+        self._prediction_inverse_transformer = None 
+        if self._prediction_inverse_transformer:
+            print('Invert features back to StdScale: True')
+        else:
+            print('Invert features back to StdScale: False')
 
         if finetune_elmo:
             # ELMo IS BROKEN! Might need to completely re-install allennlp...
@@ -202,7 +208,13 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
         """
         _sentences = [[token.text for token in sentence.tokens]
                       for sentence in flair_sentences]
-        indexed_sentences = self.vocabulary.index_sentences(_sentences)
+        if self.vocabulary:
+            indexed_sentences = self.vocabulary.index_sentences(_sentences)
+        else:  # use ELMo embedding
+            elmo = ElmoEmbedder()
+            indexed_sentences = []
+            for sent in self.sentences:
+                indexed_sentences.append(elmo.embed_sentence(sent).mean(0))
 
         for sent, flair_sent in zip(indexed_sentences, flair_sentences):
             et_features = self.et_predictor(
@@ -221,20 +233,27 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
 
 def load_pretrained_et_predictor(weights_path):
     data = torch.load(weights_path)
+
+    static_embedding = None
+    vocab = None
     if 'corpus_aggregator' in data:
         aggregator = data['corpus_aggregator']
-        vocab = aggregator.vocabulary
 
-    else:
-        aggregator = None
+    if 'vocabulary' in data:
         vocab = data['vocabulary']
+    else:
+        try:
+            vocab = aggregator.vocabulary
+        except AttributeError: # im sorry this isnt explicit. fix later.
+            static_embedding = 'elmo'
 
     model = EyeTrackingPredictor(
         initial_word_embedding=torch.zeros((len(vocab), WORD_EMBED_DIM)),
         lstm_hidden_units=int(
             data['model_state_dict']['lstm.weight_ih_l0'].shape[0] / 4),
         ### FOR TESTING ###
-        _prediction_inverse_transformer=aggregator.normalizer
+        _prediction_inverse_transformer=aggregator.normalizer,
+        static_embedding=static_embedding
     )
 
     model.load_state_dict(data['model_state_dict'])
