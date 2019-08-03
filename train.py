@@ -174,10 +174,10 @@ for k, (train_loader, test_loader) in enumerate(
         e_te_losses.append(test_loss)
         e_te_losses_.append(test_loss_)
 
-        # print('k:', k, 'e:', e,
-        #       '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
-        # print(train_loss_)
-        # print(test_loss_)
+        print('k:', k, 'e:', e,
+              '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
+        print(train_loss_)
+        print(test_loss_)
 
     best_epoch = np.argmin(e_te_losses)
     best_epochs.append(best_epoch)

@@ -73,13 +73,15 @@ class CorpusAggregator(_CrossValidator):
             self.normalizer = None
 
         if self.static_embedding:
+            self.indexed_sentences = np.array(self.sentences)
+            pass
             # Flair's ELMoEmbedding and BERTEmbedding
             # directly converts tokens into embeddings.
             # No need to manually convert them to indices
-            embed_class, embed_model, _ = STATIC_EMBEDDING[static_embedding]
-            embedding = embed_class(embed_model)
-            self.indexed_sentences = embedding.embed(
-                [Sentence(sent) for sent in self.sentences])
+            # embed_class, embed_model, _ = STATIC_EMBEDDING[static_embedding]
+            # embedding = embed_class(embed_model)
+            # self.indexed_sentences = embedding.embed(
+            #     [Sentence(sent) for sent in self.sentences])
         else:
             self.vocabulary = Vocabulary(self.sentences, filter_vocab,
                                          self.finetune_elmo)
@@ -97,7 +99,8 @@ class CorpusAggregator(_CrossValidator):
             kwargs = {
                 'normalize_wrt_mean': normalize_wrt_mean,
                 'aggregate_features': not self.train_per_sample,
-                'finetune_elmo': self.finetune_elmo
+                'finetune_elmo': self.finetune_elmo,
+                'static_embedding': self.static_embedding
             }
             if 'ZuCo' in corpus:
                 corpus_ = ZuCo(corpus.split('-')[-1], kwargs)
@@ -105,13 +108,11 @@ class CorpusAggregator(_CrossValidator):
                 corpus_ = CORPUS_CLASSES[corpus](kwargs)
 
             self.sentences.extend(corpus_.sentences)
-            self.sentence_word_lengths.extend(corpus_.sentence_word_lengths)
             self.et_targets.extend(corpus_.sentences_et)
             self.et_targets_original.extend(corpus_.sentences_et_original)
             self._index_corpus.extend([corpus] * len(corpus_))
             self.normalizers[corpus] = corpus_.normalizer
 
-        self.sentence_word_lengths = np.array(self.sentence_word_lengths)
         self.max_seq_len = max([len(s) for s in self.sentences])
         print('\nMax sentence length:', self.max_seq_len)
 
@@ -170,7 +171,6 @@ class _SplitDataset(Dataset):
         self.targets = targets
         self.targets_original = targets_original
         self.et_features = et_features
-        self.word_lengths = word_lengths
         self.aggregate_indices = indices
         self.finetune_elmo = finetune_elmo
 
@@ -180,10 +180,10 @@ class _SplitDataset(Dataset):
     def __getitem__(self, i):  # im sorry this method is like soup
         missing_dims = self.max_seq_len - len(self.indexed_sentences[i])
 
-        # PREPARE SENTENCE TENSOR
-        if self.static_embedding:
-            sentence = self.index_sentences[i]  # this is already the embedding
-        elif self.finetune_elmo:
+        # # PREPARE SENTENCE TENSOR
+        # if self.static_embedding:
+        #     sentence = self.indexed_sentences[i]  # this is already the embedding
+        if self.finetune_elmo or self.static_embedding:
             sentence = F.pad(torch.Tensor(self.indexed_sentences[i]),
                              (0, 0, 0, missing_dims))
         else:

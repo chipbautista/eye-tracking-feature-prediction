@@ -6,12 +6,12 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from torch.utils.data import Dataset
-# from allennlp.commands.elmo import ElmoEmbedder
+from allennlp.commands.elmo import ElmoEmbedder
 
 
 class Corpus(Dataset):
     def __init__(self, normalize_wrt_mean=True, aggregate_features=True,
-                 finetune_elmo=False):
+                 finetune_elmo=False, static_embedding=None):
         """
         - normalize_wrt_mean : if True, run StandardScaler over the averaged
         ET feature values, not the raw ones!!
@@ -23,10 +23,6 @@ class Corpus(Dataset):
         self.aggregate_features = aggregate_features
         self.normalize_wrt_mean = normalize_wrt_mean
         self.finetune_elmo = finetune_elmo
-
-        # used for storing pre-extracted ELMo embeddings for the sentences
-        self.elmo_embeddings_dir = 'elmo/{}.pickle'.format(
-            self.name)
 
         # the following will be filled up by `load_corpus()`
         self.sentences = []
@@ -52,27 +48,32 @@ class Corpus(Dataset):
             self.normalize_et()
             self._save_to_file()
 
+        import pdb; pdb.set_trace()
+        # DO NOT RUN THIS USING PC AT HOME!
+        if static_embedding:
+            static_embedding_dir = '../data/_static_embeddings/{}-{}.pickle'.format(
+                static_embedding, self.name)
+            if static_embedding == 'elmo':
+                try:
+                    with open(static_embedding_dir, 'rb') as f:
+                            self.sentences = pickle.load(f)
+                    print('Loaded pre-extracted ELMo embeddings.')
+                except FileNotFoundError:
+                    print('Pre-extracted ELMo embeddings for', self.name,
+                          'not found. Extracting now...')
+                    elmo = ElmoEmbedder()
 
-        # ELMO/ALLENNLP IS BROKEN!
-        """
-        if finetune_elmo:
-            try:
-                with open(self.elmo_embeddings_dir, 'rb') as f:
-                    self.indexed_sentences = pickle.load(f)
-            except FileNotFoundError:
-                print('Pre-extracted ELMo embeddings for', self.name,
-                      'not found. Extracting now...')
-                elmo = ElmoEmbedder()
-                import pdb; pdb.set_trace()
-                # self.elmo_embeddings = []
-                # for sent in self.sentences:
-                #     self.elmo_embeddings.append(elmo.embed_sentence(sent))
-                self.elmo_embeddings = list(elmo.embed_sentences(self.sentences))
-                with open(self.elmo_embeddings_dir, 'wb') as f:
-                    pickle.dump(self.elmo_embeddings, f)
-                print('Saved extracted ELMo embeddings to:',
-                      self.elmo_embeddings_dir)
-        """
+                    indexed_sentences = []
+                    for sent in self.sentences:
+                        # store average of the 3 ELMo embeddings
+                        indexed_sentences.append(
+                            elmo.embed_sentence(sent).mean(0))
+
+                    with open(static_embedding_dir, 'wb') as f:
+                        pickle.dump(np.array(indexed_sentences), f)
+                    print('Saved extracted ELMo embeddings to:',
+                          static_embedding_dir)
+                    self.sentences = indexed_sentences
 
     def clean_str(self, string):
         """
@@ -157,6 +158,7 @@ class ZuCo(Corpus):
             task_code = '_TSR'
 
         self.directory = '../data/ZuCo/et_features{}.npy'.format(task_code)
+
         self.et_features = ['nFixations', 'FFD', 'TRT', 'GD', 'GPT']
         super(ZuCo, self).__init__(**kwargs)
 

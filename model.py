@@ -66,7 +66,6 @@ class EyeTrackingPredictor(torch.nn.Module):
     def forward(self, x):
         if self.use_cuda:
             x = x.cuda()
-        import pdb; pdb.set_trace()
         word_embeddings = self.word_embedding(x)
 
         # Actual forward pass:
