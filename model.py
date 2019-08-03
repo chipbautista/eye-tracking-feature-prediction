@@ -1,7 +1,10 @@
+import pickle
 
 import torch
+import numpy as np
 from flair.embeddings import TokenEmbeddings, BertEmbeddings, ELMoEmbeddings
 from allennlp.modules.elmo import Elmo
+from allennlp.commands.elmo import ElmoEmbedder
 
 from settings import *
 
@@ -186,14 +189,16 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
     Used for training tasks already available in Flair, to add
     eye-tracking features to the tokens. See `train_flair.py`
     """
-    def __init__(self, model_path):
+    def __init__(self, model_path, dataset):
         super().__init__()
         self.name = 'et_features'
+        self.dataset = dataset
+        if 'elmo' in model_path:
+            self.static_embedding = 'elmo'
+            self.elmo = _ElmoEmbedder(self.dataset)
         self.et_predictor, self.vocabulary, agg = load_pretrained_et_predictor(
             model_path)
-        self.et_predictor.cuda()
-        # - Instantiate EyeTrackingPredictor with weights
-        # - Should also store dictionary! ^
+        # self.et_predictor.cuda()
 
     @property
     def embedding_length(self):
@@ -208,24 +213,28 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
         """
         _sentences = [[token.text for token in sentence.tokens]
                       for sentence in flair_sentences]
-        if self.vocabulary:
+        if self.static_embedding == 'elmo':
+            indexed_sentences = np.array(
+                [self.elmo._embed(sent) for sent in _sentences])
+        else:
             indexed_sentences = self.vocabulary.index_sentences(_sentences)
-        else:  # use ELMo embedding
-            elmo = ElmoEmbedder()
-            indexed_sentences = []
-            for sent in self.sentences:
-                indexed_sentences.append(elmo.embed_sentence(sent).mean(0))
 
         for sent, flair_sent in zip(indexed_sentences, flair_sentences):
-            et_features = self.et_predictor(
-                torch.Tensor([sent]).long().cuda()).detach().cpu()[0]
+            _sent = torch.Tensor([sent])
+
+            if self.static_embedding != 'elmo':
+                _sent = _sent.long()
+            if USE_CUDA:
+                _sent = _sent.cuda()
+
+            et_features = self.et_predictor(_sent).detach().cpu()[0]
 
             if self.et_predictor._prediction_inverse_transformer:
                 et_features = torch.Tensor([
                     self.et_predictor._prediction_inverse_transformer.inverse_transform(
                         et_features)])
 
-            for et_feat, token in zip(et_features[0], flair_sent.tokens):
+            for et_feat, token in zip(et_features, flair_sent.tokens):
                 token.set_embedding('ET_feature', et_feat)
 
         return flair_sentences
@@ -235,7 +244,6 @@ def load_pretrained_et_predictor(weights_path):
     data = torch.load(weights_path)
 
     static_embedding = None
-    vocab = None
     if 'corpus_aggregator' in data:
         aggregator = data['corpus_aggregator']
 
@@ -245,10 +253,15 @@ def load_pretrained_et_predictor(weights_path):
         try:
             vocab = aggregator.vocabulary
         except AttributeError: # im sorry this isnt explicit. fix later.
+            vocab = None
             static_embedding = 'elmo'
+            init_word_embed = None
+
+    if vocab:
+        init_word_embed = torch.zeros((len(vocab), WORD_EMBED_DIM))
 
     model = EyeTrackingPredictor(
-        initial_word_embedding=torch.zeros((len(vocab), WORD_EMBED_DIM)),
+        initial_word_embedding=init_word_embed,
         lstm_hidden_units=int(
             data['model_state_dict']['lstm.weight_ih_l0'].shape[0] / 4),
         ### FOR TESTING ###
@@ -260,3 +273,33 @@ def load_pretrained_et_predictor(weights_path):
     model.eval()
 
     return model, vocab, aggregator
+
+
+class _ElmoEmbedder:
+    def __init__(self, dataset):
+        self.dataset = dataset
+        self.static_embedding_dir = STATIC_EMBEDDING_DIR.format(
+            'elmo', dataset)
+        self.elmo = ElmoEmbedder()
+
+    def _embed(self, sentence):
+        return self.elmo.embed_sentence(sentence).mean(0)
+
+    def get_embeddings(self, sentences):
+        try:
+            with open(self.static_embedding_dir, 'rb') as f:
+                embeddings = pickle.load(f)
+            print('Loaded pre-extracted ELMo embeddings.')
+        except FileNotFoundError:
+            print('Pre-extracted ELMo embeddings for', self.dataset,
+                  'not found. Extracting now...')
+            embeddings = []
+            for sent in sentences:
+                # store average of the 3 ELMo embeddings
+                embeddings.append(self._embed(sent))
+
+            with open(self.static_embedding_dir, 'wb') as f:
+                pickle.dump(np.array(embeddings), f)
+            print('Saved extracted ELMo embeddings to:',
+                  self.static_embedding_dir)
+        return embeddings

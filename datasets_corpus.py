@@ -8,6 +8,8 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from torch.utils.data import Dataset
 from allennlp.commands.elmo import ElmoEmbedder
 
+from model import _ElmoEmbedder
+
 
 class Corpus(Dataset):
     def __init__(self, normalize_wrt_mean=True, aggregate_features=True,
@@ -50,29 +52,9 @@ class Corpus(Dataset):
 
         # DO NOT RUN THIS USING PC AT HOME!
         if static_embedding:
-            static_embedding_dir = '../data/_static_embeddings/{}-{}.pickle'.format(
-                static_embedding, self.name)
             if static_embedding == 'elmo':
-                try:
-                    with open(static_embedding_dir, 'rb') as f:
-                            self.sentences = pickle.load(f)
-                    print('Loaded pre-extracted ELMo embeddings.')
-                except FileNotFoundError:
-                    print('Pre-extracted ELMo embeddings for', self.name,
-                          'not found. Extracting now...')
-                    elmo = ElmoEmbedder()
-
-                    indexed_sentences = []
-                    for sent in self.sentences:
-                        # store average of the 3 ELMo embeddings
-                        indexed_sentences.append(
-                            elmo.embed_sentence(sent).mean(0))
-
-                    with open(static_embedding_dir, 'wb') as f:
-                        pickle.dump(np.array(indexed_sentences), f)
-                    print('Saved extracted ELMo embeddings to:',
-                          static_embedding_dir)
-                    self.sentences = indexed_sentences
+                elmo_embedder = _ElmoEmbedder(self.name)
+                self.sentences = elmo_embedder.get_embeddings(self.sentences)
 
     def clean_str(self, string):
         """
