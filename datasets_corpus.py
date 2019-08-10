@@ -248,7 +248,6 @@ class GECO(Corpus):
         print('Found', len(sentence_ids), 'unique sentence IDs.')
 
         for sn, sent_id in enumerate(sentence_ids):
-            print(sn)
             if sent_id == 'nan':
                 continue
 

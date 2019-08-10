@@ -189,7 +189,7 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
     Used for training tasks already available in Flair, to add
     eye-tracking features to the tokens. See `train_flair.py`
     """
-    def __init__(self, model_path, dataset):
+    def __init__(self, model_path, dataset=''):
         super().__init__()
         self.name = 'et_features'
         self.dataset = dataset
