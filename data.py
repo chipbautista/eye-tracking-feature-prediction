@@ -44,10 +44,11 @@ class _CrossValidator:
 
 
 class CorpusAggregator(_CrossValidator):
-    def __init__(self, corpus_list, normalize_wrt_mean=False, filter_vocab=False,
+    def __init__(self, corpus_list, corpus_normalizer, normalize_wrt_mean=False, filter_vocab=False,
                  use_word_length=False, finetune_elmo=False, static_embedding=None,
                  train_per_sample=False, minmax_aggregate=False):
 
+        self.corpus_normalizer = corpus_normalizer
         self.batch_size = BATCH_SIZE
         self.minmax_aggregate = minmax_aggregate  # clean this up later...
         self.filter_vocab = filter_vocab
@@ -92,7 +93,8 @@ class CorpusAggregator(_CrossValidator):
                 'normalize_wrt_mean': normalize_wrt_mean,
                 'aggregate_features': not self.train_per_sample,
                 'finetune_elmo': self.finetune_elmo,
-                'static_embedding': self.static_embedding
+                'static_embedding': self.static_embedding,
+                'normalizer': self.corpus_normalizer
             }
             if 'ZuCo' in corpus:
                 corpus_ = ZuCo(corpus.split('-')[-1], kwargs)

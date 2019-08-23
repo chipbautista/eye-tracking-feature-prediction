@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 
 import torch
 import numpy as np
+from sklearn.metrics import r2_score
 
 from data import CorpusAggregator
 from model import EyeTrackingPredictor
@@ -29,6 +30,7 @@ def iterate(dataloader):
     epoch_loss = 0.0
     # loss calculated on the real/original values (not scaled)
     epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
+    r2_scores = torch.Tensor([0, 0, 0, 0, 0])
     for i, (sentences, et_targets,
             et_targets_orig, indices) in enumerate(dataloader):
 
@@ -57,14 +59,16 @@ def iterate(dataloader):
         num_data_points = et_targets_orig[et_targets_orig > 0].shape[0]
         # mse loss divided by the actual number of data points
         # (have to disregard the padding!)
-        # loss = torch.sqrt(mse_loss(et_preds, et_targets) / num_data_points)
-        loss = mae_loss(et_preds, et_targets) / num_data_points
+        loss = torch.sqrt(mse_loss(et_preds, et_targets) / num_data_points)
 
         # calculate the loss PER FEATURE
-        loss_ = torch.Tensor([mae_loss(et_preds_inverse[:, :, i],
+        loss_ = torch.Tensor([mse_loss(et_preds_inverse[:, :, i],
                                        et_targets_orig[:, :, i]).item()
-                              for i in range(5)])
-        loss_ /= (num_data_points / 5)
+                              for i in range(5)]) / (num_data_points / 5)
+        loss_ = torch.sqrt(loss_)
+        r2 = torch.Tensor(r2_score(et_targets_orig.reshape(-1, 5),
+                                   et_preds_inverse.reshape(-1, 5),
+                                   multioutput='raw_values'))
 
         if model.training:
             optimizer.zero_grad()
@@ -73,8 +77,9 @@ def iterate(dataloader):
 
         epoch_loss += loss.item()
         epoch_loss_ += loss_
+        r2_scores += r2
 
-    return epoch_loss / (i + 1), epoch_loss_ / (i + 1)
+    return epoch_loss / (i + 1), epoch_loss_ / (i + 1), r2_scores / (i + 1)
 
 
 parser = ArgumentParser()
@@ -90,6 +95,7 @@ parser.add_argument('--minmax-aggregate', default='False')
 parser.add_argument('--filter-vocab', default='True')
 parser.add_argument('--normalize-wrt-mean', default='False')
 parser.add_argument('--train-per-sample', default='False')
+parser.add_argument('--normalizer', default='std')
 # Predictor Settings
 parser.add_argument('--static-embedding', default='')
 parser.add_argument('--finetune-elmo', default='False',
@@ -128,9 +134,10 @@ dataset = CorpusAggregator(corpus_list,
                            filter_vocab=eval(args.filter_vocab),
                            finetune_elmo=eval(args.finetune_elmo),
                            train_per_sample=eval(args.train_per_sample),
-                           static_embedding=args.static_embedding)
+                           static_embedding=args.static_embedding,
+                           corpus_normalizer=args.normalizer)
 mse_loss = torch.nn.MSELoss(reduction='sum')
-mae_loss = torch.nn.L1Loss(reduction='sum')
+# mae_loss = torch.nn.L1Loss(reduction='sum')
 
 print('--- PARAMETERS ---')
 print('Learning Rate:', eval(args.lr))
@@ -143,6 +150,7 @@ print('\n--- Starting training (10-CV) ---')
 
 te_losses = []
 te_losses_ = []
+te_r2 = []
 for k, (train_loader, test_loader) in enumerate(
         dataset.split_cross_val(stratified=False)):
     _start_time = time.time()
@@ -158,53 +166,64 @@ for k, (train_loader, test_loader) in enumerate(
     best_epochs = []
     e_tr_losses = []
     e_tr_losses_ = []
+    e_tr_r2 = []
     e_te_losses = []
     e_te_losses_ = []
+    e_te_r2 = []
     for e in range(eval(args.num_epochs)):
         model.train()
-        train_loss, train_loss_ = iterate(train_loader)
+        train_loss, train_loss_, train_r2 = iterate(train_loader)
 
         model.eval()
-        test_loss, test_loss_ = iterate(test_loader)
+        test_loss, test_loss_, test_r2 = iterate(test_loader)
         optim_scheduler.step(test_loss)
 
         e_tr_losses.append(train_loss)
         e_tr_losses_.append(train_loss_)
+        e_tr_r2.append(train_r2)
         e_te_losses.append(test_loss)
         e_te_losses_.append(test_loss_)
+        e_te_r2.append(test_r2)
 
-        print('k:', k, 'e:', e,
-              '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
-        print(train_loss_)
-        print(test_loss_)
+        # print('k:', k, 'e:', e,
+        #       '{:.5f}'.format(train_loss), '{:.5f}'.format(test_loss))
+        # print(train_loss_)
+        # print(test_loss_)
+        # print(train_r2)
+        # print(test_r2)
 
     best_epoch = np.argmin(e_te_losses)
     best_epochs.append(best_epoch)
     te_losses.append(e_te_losses[best_epoch])
     te_losses_.append(e_te_losses_[best_epoch])
+    te_r2.append(e_te_r2[best_epoch])
 
     print(k, '[e={}] '.format(best_epoch),
           '- Train rMSE: {:.5f}'.format(e_tr_losses[best_epoch]),
           'Test rMSE: {:.5f} '.format(e_te_losses[best_epoch]),
           '({:.2f}s)'.format(time.time() - _start_time))
-    print('Train MAE:', e_tr_losses_[best_epoch])
-    print('Test MAE:', e_te_losses_[best_epoch])
+    print('Train rMSE:', e_tr_losses_[best_epoch])
+    print('Test rMSE:', e_te_losses_[best_epoch])
+    print('Train R2:', e_tr_r2[best_epoch])
+    print('Test R2:', e_te_r2[best_epoch])
 
 print('\nCV Mean Test Loss:', np.mean(te_losses))
-print(torch.stack(te_losses_).mean(0))
+print('Mean rMSE Loss Per Feature:', torch.stack(te_losses_).mean(0))
+print('Mean R2 Score Per Feature:', torch.stack(te_r2).mean(0))
+
 
 if args.save_model is not False:
     mean_epoch = int(round(np.mean(best_epochs)))
     print('Mean number of epochs until overfit:', mean_epoch)
     print('Will save final model. Will now train on all data points in',
-          mean_epoch + 3, 'epochs.')
+          mean_epoch, 'epochs.')
 
     train_loader = dataset._get_dataloader(
         indices=np.array(range(len(dataset.sentences))))
 
-    for e in range(mean_epoch + 3):
-        loss, loss_ = iterate(train_loader)
-    print(loss, loss_)
+    for e in range(mean_epoch):
+        loss, loss_, r2 = iterate(train_loader)
+    print(loss, loss_, r2)
 
     # just building the filename...
     model_datasets = ''
@@ -216,14 +235,19 @@ if args.save_model is not False:
             model_datasets += corpus[0]
 
     filename = TRAINED_ET_MODEL_DIR.format(model_datasets)
-    if eval(args.filter_vocab):
-        filename += '-UNK'
+    # if eval(args.filter_vocab):
+    #     filename += '-UNK'
     # if eval(args.finetune_elmo_embeddings):
     #     filename += '-ELMo'
     if eval(args.train_per_sample):
-        filename += 'persample'
+        filename += '-persample'
     if args.static_embedding:
         filename += '-' + args.static_embedding
+    if eval(args.normalize_wrt_mean):
+        filename += '-wrtmean'
+    if eval(args.minmax_aggregate):
+        filename += '-minmaxaggr'
+    filename += '-meanepoch'
 
     torch.save({
         'model_state_dict': model.state_dict(),

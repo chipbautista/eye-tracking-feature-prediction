@@ -13,7 +13,7 @@ from model import _ElmoEmbedder
 
 class Corpus(Dataset):
     def __init__(self, normalize_wrt_mean=True, aggregate_features=True,
-                 finetune_elmo=False, static_embedding=None):
+                 finetune_elmo=False, static_embedding=None, normalizer='std'):
         """
         - normalize_wrt_mean : if True, run StandardScaler over the averaged
         ET feature values, not the raw ones!!
@@ -34,7 +34,7 @@ class Corpus(Dataset):
         # will be created by `normalize_et`
         self.sentences_et_original = []
 
-        self.normalizer = StandardScaler()
+        self.normalizer = StandardScaler() if normalizer == 'std' else MinMaxScaler()
 
         print('\n===== Initializing', self.name, '=====')
         feature_values = self.load_corpus()
@@ -243,7 +243,6 @@ class GECO(Corpus):
         material_df = pd.read_excel(self.directory.format('EnglishMaterial'))
         geco_df = pd.read_excel(self.directory.format('MonolingualReadingData'))
 
-        # do this per sentence!
         sentence_ids = material_df['SENTENCE_ID'].unique().astype('str')
         print('Found', len(sentence_ids), 'unique sentence IDs.')
 

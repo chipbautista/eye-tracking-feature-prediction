@@ -189,16 +189,18 @@ class EyeTrackingFeatureEmbedding(TokenEmbeddings):
     Used for training tasks already available in Flair, to add
     eye-tracking features to the tokens. See `train_flair.py`
     """
-    def __init__(self, model_path, dataset):
+    def __init__(self, model_path, dataset=''):
         super().__init__()
         self.name = 'et_features'
         self.dataset = dataset
+
+        self.static_embedding = None
         if 'elmo' in model_path:
             self.static_embedding = 'elmo'
             self.elmo = _ElmoEmbedder(self.dataset)
         self.et_predictor, self.vocabulary, agg = load_pretrained_et_predictor(
             model_path)
-        # self.et_predictor.cuda()
+        self.et_predictor.cuda()
 
     @property
     def embedding_length(self):
