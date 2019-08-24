@@ -3,83 +3,10 @@ from argparse import ArgumentParser
 
 import torch
 import numpy as np
-from sklearn.metrics import r2_score
 
 from data import CorpusAggregator
-from model import EyeTrackingPredictor
+from trainer import Trainer
 from settings import *
-
-
-def _get_model_and_optim():
-    if args.finetune_elmo != 'False' or args.static_embedding:
-        model = EyeTrackingPredictor(
-            finetune_elmo=eval(args.finetune_elmo),
-            static_embedding=args.static_embedding)
-    else:
-        model = EyeTrackingPredictor(
-            dataset.vocabulary.word_embeddings.clone())
-
-    return (
-        model,
-        torch.optim.Adam(model.parameters(), lr=eval(args.lr))
-    )
-
-
-# should probably move this to a Trainer class...
-def iterate(dataloader):
-    epoch_loss = 0.0
-    # loss calculated on the real/original values (not scaled)
-    epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
-    r2_scores = torch.Tensor([0, 0, 0, 0, 0])
-    for i, (sentences, et_targets,
-            et_targets_orig, indices) in enumerate(dataloader):
-
-        # if not args.finetune_elmo_embeddings:
-        # sentences = sentences.type(torch.LongTensor)
-        if USE_CUDA:
-            sentences = sentences.cuda()
-            et_targets = et_targets.cuda()
-
-        et_preds = model(sentences)
-
-        et_preds_inverse = torch.Tensor([
-            dataset.inverse_transform(idx, value)
-            for (idx, value) in zip(indices, et_preds.detach().cpu())])
-
-        # starting from the padding index, make the prediction values 0
-        for sent, et_pred, et_pred_inverse in zip(
-                sentences, et_preds, et_preds_inverse):
-            try:
-                pad_start_idx = np.where(sent.cpu().numpy() == 0)[0][0]
-            except IndexError:
-                pad_start_idx = None
-            et_pred[pad_start_idx:] = 0
-            et_pred_inverse[pad_start_idx:] = 0
-
-        num_data_points = et_targets_orig[et_targets_orig > 0].shape[0]
-        # mse loss divided by the actual number of data points
-        # (have to disregard the padding!)
-        loss = torch.sqrt(mse_loss(et_preds, et_targets) / num_data_points)
-
-        # calculate the loss PER FEATURE
-        loss_ = torch.Tensor([mse_loss(et_preds_inverse[:, :, i],
-                                       et_targets_orig[:, :, i]).item()
-                              for i in range(5)]) / (num_data_points / 5)
-        loss_ = torch.sqrt(loss_)
-        r2 = torch.Tensor(r2_score(et_targets_orig.reshape(-1, 5),
-                                   et_preds_inverse.reshape(-1, 5),
-                                   multioutput='raw_values'))
-
-        if model.training:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-        epoch_loss += loss.item()
-        epoch_loss_ += loss_
-        r2_scores += r2
-
-    return epoch_loss / (i + 1), epoch_loss_ / (i + 1), r2_scores / (i + 1)
 
 
 parser = ArgumentParser()
@@ -136,8 +63,7 @@ dataset = CorpusAggregator(corpus_list,
                            train_per_sample=eval(args.train_per_sample),
                            static_embedding=args.static_embedding,
                            corpus_normalizer=args.normalizer)
-mse_loss = torch.nn.MSELoss(reduction='sum')
-# mae_loss = torch.nn.L1Loss(reduction='sum')
+trainer = Trainer(dataset)
 
 print('--- PARAMETERS ---')
 print('Learning Rate:', eval(args.lr))
@@ -161,7 +87,7 @@ for k, (train_loader, test_loader) in enumerate(
 
     model, optimizer = _get_model_and_optim()
     optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, factor=0.1, patience=2, verbose=False)
+        optimizer, factor=0.1, patience=2, verbose=True)
 
     best_epochs = []
     e_tr_losses = []
@@ -171,11 +97,14 @@ for k, (train_loader, test_loader) in enumerate(
     e_te_losses_ = []
     e_te_r2 = []
     for e in range(eval(args.num_epochs)):
+        model, optimizer = trainer.init_model(args)
         model.train()
-        train_loss, train_loss_, train_r2 = iterate(train_loader)
+        train_loss, train_loss_, train_r2 = trainer.iterate(
+            model, optimizer, train_loader)
 
         model.eval()
-        test_loss, test_loss_, test_r2 = iterate(test_loader)
+        test_loss, test_loss_, test_r2 = trainer.iterate(
+            model, optimizer, test_loader)
         optim_scheduler.step(test_loss)
 
         e_tr_losses.append(train_loss)
@@ -222,7 +151,8 @@ if args.save_model is not False:
         indices=np.array(range(len(dataset.sentences))))
 
     for e in range(mean_epoch):
-        loss, loss_, r2 = iterate(train_loader)
+        loss, loss_, r2 = trainer.iterate(
+            *trainer.init_model(args), train_loader)
     print(loss, loss_, r2)
 
     # just building the filename...
