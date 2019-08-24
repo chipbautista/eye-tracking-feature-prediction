@@ -9,6 +9,8 @@ from allennlp.commands.elmo import ElmoEmbedder
 from settings import *
 
 torch.manual_seed(111)
+np.random.seed(111)
+
 ELMO_OPTIONS_URL = "https://allennlp.s3.amazonaws.com/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_options.json"
 ELMO_WEIGHT_URL = "https://allennlp.s3.amazonaws.com/models/elmo/2x4096_512_2048cnn_2xhighway/elmo_2x4096_512_2048cnn_2xhighway_weights.hdf5"
 
@@ -31,10 +33,10 @@ class EyeTrackingPredictor(torch.nn.Module):
         print('Initializing ET Predictor')
         # self._prediction_inverse_transformer = _prediction_inverse_transformer
         self._prediction_inverse_transformer = None 
-        if self._prediction_inverse_transformer:
-            print('Invert features back to StdScale: True')
-        else:
-            print('Invert features back to StdScale: False')
+        # if self._prediction_inverse_transformer:
+        #     print('Invert features back to StdScale: True')
+        # else:
+        #     print('Invert features back to StdScale: False')
 
         if finetune_elmo:
             # ELMo IS BROKEN! Might need to completely re-install allennlp...

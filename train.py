@@ -20,7 +20,7 @@ parser.add_argument('--ucl', default=False)
 # Data Set Preparation
 parser.add_argument('--minmax-aggregate', default='False')
 parser.add_argument('--filter-vocab', default='True')
-parser.add_argument('--normalize-wrt-mean', default='False')
+parser.add_argument('--normalize-wrt-mean', default='True')
 parser.add_argument('--train-per-sample', default='False')
 parser.add_argument('--normalizer', default='std')
 # Predictor Settings
@@ -85,9 +85,9 @@ for k, (train_loader, test_loader) in enumerate(
         print('Train #batches:', len(train_loader))
         print('Test #batches:', len(test_loader))
 
-    model, optimizer = _get_model_and_optim()
+    model, optimizer = trainer.init_model(args)
     optim_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, factor=0.1, patience=2, verbose=True)
+        optimizer, factor=0.1, patience=3, verbose=True)
 
     best_epochs = []
     e_tr_losses = []
@@ -97,7 +97,6 @@ for k, (train_loader, test_loader) in enumerate(
     e_te_losses_ = []
     e_te_r2 = []
     for e in range(eval(args.num_epochs)):
-        model, optimizer = trainer.init_model(args)
         model.train()
         train_loss, train_loss_, train_r2 = trainer.iterate(
             model, optimizer, train_loader)
@@ -145,14 +144,15 @@ if args.save_model is not False:
     mean_epoch = int(round(np.mean(best_epochs)))
     print('Mean number of epochs until overfit:', mean_epoch)
     print('Will save final model. Will now train on all data points in',
-          mean_epoch, 'epochs.')
+          mean_epoch + 2, 'epochs.')
 
     train_loader = dataset._get_dataloader(
         indices=np.array(range(len(dataset.sentences))))
 
-    for e in range(mean_epoch):
+    model, optimizer = trainer.init_model(args)
+    for e in range(mean_epoch + 2):
         loss, loss_, r2 = trainer.iterate(
-            *trainer.init_model(args), train_loader)
+            model, optimizer, train_loader)
     print(loss, loss_, r2)
 
     # just building the filename...
@@ -177,7 +177,6 @@ if args.save_model is not False:
         filename += '-wrtmean'
     if eval(args.minmax_aggregate):
         filename += '-minmaxaggr'
-    filename += '-meanepoch'
 
     torch.save({
         'model_state_dict': model.state_dict(),

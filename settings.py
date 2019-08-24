@@ -14,6 +14,6 @@ WORD_EMBED_DIM = 300
 
 # Directories
 WORD_EMBED_MODEL_DIR = 'models/GoogleNews-vectors-negative300.bin'
-TRAINED_ET_MODEL_DIR = '../08-15/models/predictor-{}'
+TRAINED_ET_MODEL_DIR = '../08-24/models/predictor-{}'
 TASK_DATASET_DIR = '../data_tasks/'
 STATIC_EMBEDDING_DIR = '../data/_static_embeddings/{}-{}.pickle'

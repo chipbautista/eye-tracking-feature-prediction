@@ -16,7 +16,7 @@ from datasets_corpus import *
 from model import STATIC_EMBEDDING
 from settings import BATCH_SIZE, WORD_EMBED_DIM, WORD_EMBED_MODEL_DIR
 
-
+torch.manual_seed(111)
 np.random.seed(111)
 CORPUS_CLASSES = {'PROVO': PROVO, 'GECO': GECO, 'UCL': UCL}
 
