@@ -99,11 +99,11 @@ for k, (train_loader, test_loader) in enumerate(
     for e in range(eval(args.num_epochs)):
         model.train()
         train_loss, train_loss_, train_r2 = trainer.iterate(
-            model, optimizer, train_loader)
+            model, train_loader, optimizer)
 
         model.eval()
         test_loss, test_loss_, test_r2 = trainer.iterate(
-            model, optimizer, test_loader)
+            model, test_loader, optimizer)
         optim_scheduler.step(test_loss)
 
         e_tr_losses.append(train_loss)
@@ -152,7 +152,7 @@ if args.save_model is not False:
     model, optimizer = trainer.init_model(args)
     for e in range(mean_epoch + 2):
         loss, loss_, r2 = trainer.iterate(
-            model, optimizer, train_loader)
+            model, train_loader, optimizer)
     print(loss, loss_, r2)
 
     # just building the filename...

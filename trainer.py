@@ -25,7 +25,7 @@ class Trainer:
             torch.optim.Adam(model.parameters(), lr=eval(args.lr))
         )
 
-    def iterate(self, model, optimizer, dataloader):
+    def iterate(self, model, dataloader, optimizer=None):
         epoch_loss = 0.0
         # loss calculated on the real/original values (not scaled)
         epoch_loss_ = torch.Tensor([0, 0, 0, 0, 0])
