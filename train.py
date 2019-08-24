@@ -144,13 +144,13 @@ if args.save_model is not False:
     mean_epoch = int(round(np.mean(best_epochs)))
     print('Mean number of epochs until overfit:', mean_epoch)
     print('Will save final model. Will now train on all data points in',
-          mean_epoch + 2, 'epochs.')
+          mean_epoch, 'epochs.')
 
     train_loader = dataset._get_dataloader(
         indices=np.array(range(len(dataset.sentences))))
 
     model, optimizer = trainer.init_model(args)
-    for e in range(mean_epoch + 2):
+    for e in range(mean_epoch):
         loss, loss_, r2 = trainer.iterate(
             model, train_loader, optimizer)
     print(loss, loss_, r2)

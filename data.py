@@ -46,7 +46,7 @@ class _CrossValidator:
 class CorpusAggregator(_CrossValidator):
     def __init__(self, corpus_list, corpus_normalizer, normalize_wrt_mean=False, filter_vocab=False,
                  use_word_length=False, finetune_elmo=False, static_embedding=None,
-                 train_per_sample=False, minmax_aggregate=False):
+                 train_per_sample=False, minmax_aggregate=False, vocabulary=None):
 
         self.corpus_normalizer = corpus_normalizer
         self.batch_size = BATCH_SIZE
@@ -75,6 +75,10 @@ class CorpusAggregator(_CrossValidator):
 
         if self.static_embedding:
             self.indexed_sentences = np.array(self.sentences)
+        if vocabulary:
+            self.vocabulary = vocabulary
+            self.indexed_sentences = self.vocabulary.index_sentences(
+                self.sentences)
         else:
             self.vocabulary = Vocabulary(self.sentences, filter_vocab,
                                          self.finetune_elmo)
@@ -312,7 +316,13 @@ class Vocabulary:
             return '<UNK>', False
 
     def get_index(self, word):
-        return self.vocabulary[self._fix_word(self.vocabulary, word)[0]]
+        try:
+            return self.vocabulary[self._fix_word(self.vocabulary, word)[0]]
+        except KeyError:
+            # this is a quick fix, i'm sorry
+            # KeyError will only happen when loading the vocab from the
+            # saved model. This shouldn't affect training.
+            return self.vocabulary['<UNK>']
 
     def __getitem__(self, key):
         return self.vocabulary[key]
